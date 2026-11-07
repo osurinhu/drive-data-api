@@ -1,6 +1,6 @@
 # Como estender
 
-Dez receitas, da mais comum para a mais rara. Em todas, use `Item` como molde — a
+Onze receitas, da mais comum para a mais rara. Em todas, use `Item` como molde — a
 entidade de exemplo existe para ser copiada (e removida quando você tiver as suas).
 
 | Quero… | Vá para |
@@ -15,6 +15,7 @@ entidade de exemplo existe para ser copiada (e removida quando você tiver as su
 | Um comando `flask ...` | [8](#8-comando-cli) |
 | Uma chave de configuração | [9](#9-configuração) |
 | Restringir uma rota, ou criar permissão/papel | [10](#10-autorização) |
+| Mudar a mensagem que atravessa a fila | [11](#11-contrato-da-fila) |
 
 No fim há um [checklist de revisão](#checklist-de-revisão).
 
@@ -152,6 +153,11 @@ Duas linhas:
 product_repository = providers.Factory(ProductRepository)
 product_service = providers.Factory(ProductService, repository=product_repository)
 ```
+
+Adaptador que guarda uma conexão (o `RabbitTelemetryPublisher`) é `providers.Singleton`: uma
+instância por processo, que abre a conexão no primeiro uso. Os valores do `settings.toml` que
+ele recebe no construtor saem de `config`, um `providers.Configuration` que o `init_app`
+preenche a partir do `app.config`. O adaptador continua sem ler `current_app`.
 
 ### 1.7 Permissões — `app/domain/authz.py`
 
@@ -372,6 +378,11 @@ ERROR_STATUS = {
 
 Se o status ainda não estiver em `STATUS_DESCRIPTION`, acrescente também.
 
+Erro que pede um header na resposta é a exceção, e não a rota, que o carrega. O
+`ServiceUnavailableError` leva `retry_after`, e o `ext/error_handler.py` o transforma em
+`Retry-After`. O serviço continua sem saber o que é header: ele diz quando repetir, e a camada
+HTTP decide como contar isso ao cliente.
+
 Esquecer o passo 2 **reprova** em `tests/test_contracts.py` — sem esse teste, a exceção
 cairia no handler genérico e viraria um 500 silencioso.
 
@@ -507,6 +518,30 @@ mensagem de terminal com `raise click.ClickException(str(error)) from error`, co
 `create-user` e `set-role`.
 
 Uso: `docker compose exec api flask recalcular-totais`
+
+**Comando de operação de uma infraestrutura** (aplicar a topologia do RabbitMQ, criar os índices
+do Mongo) não vai em `ext/commands.py`: fica na extensão dona daquela infraestrutura, num
+`AppGroup` com o nome do módulo, registrado no `init_app` dela. O molde é o
+`flask rabbitmq setup` de `ext/rabbitmq.py`:
+
+```python
+rabbitmq_cli = AppGroup("rabbitmq", help="Operação do RabbitMQ.")
+
+
+@rabbitmq_cli.command("setup")
+def setup() -> None:
+    ...
+
+
+def init_app(app: Flask) -> None:
+    ...
+    app.cli.add_command(rabbitmq_cli)
+```
+
+O motivo é o perfil. O job `setup` carrega só o que usa (`[setup]`), e o `ext.commands` traz o
+banco e o container junto. Na extensão, o comando chega a todo processo que conhece aquela
+infraestrutura, e a nenhum outro. A credencial de operação (`AMQP_MANAGEMENT_URL`) é lida só
+dentro do comando: o processo que nunca o roda não precisa dela.
 
 ---
 
@@ -651,6 +686,59 @@ banco.
 O `--role` da CLI sai da própria enumeração, então não há segunda lista para atualizar.
 Esquecer o passo 2 **reprova** em `tests/test_contracts.py`.
 
+## 11. Contrato da fila
+
+O contrato `telemetry.batch.v1` mora em `app/domain/contracts/telemetry_batch.py`: o envelope
+(dataclasses), o `encode`/`decode` e o endereço (`EXCHANGE`, `ROUTING_KEY`). O producer e o
+consumer só se conhecem por ele (02-decisoes, "O contrato da fila é uma folha versionada").
+
+### 11.1 Campo novo e opcional — a mesma versão
+
+O decoder ignora campo desconhecido, então o consumer antigo segue funcionando.
+
+1. O campo na dataclass, **com valor padrão**, e no schema privado do mesmo módulo, com
+   `load_default`, para o decoder aceitar a mensagem que ainda não o traz:
+
+   ```python
+   @dataclass(frozen=True, slots=True)
+   class TelemetryRecordV1:
+       ...
+       app_version: str | None = None
+
+
+   class _RecordSchema(Schema):
+       ...
+       app_version = fields.String(load_default=None, allow_none=True)
+   ```
+
+2. O campo no exemplo canônico, `tests/data/telemetry_batch_v1.json`: o encoder passa a
+   escrevê-lo, e `test_codificar_o_exemplo_devolve_o_mesmo_json` reprova até o exemplo
+   acompanhar.
+3. Publique o producer novo. O consumer só passa a **usar** o campo depois disso, e trata a
+   ausência: mensagens antigas ainda podem estar na fila.
+
+### 11.2 Mudança incompatível — a v2
+
+Remover, renomear, tornar obrigatório ou mudar o significado de um campo.
+
+1. Um módulo novo, `telemetry_batch_v2.py`, com `SCHEMA_VERSION = 2` e
+   `ROUTING_KEY = "telemetry.batch.v2"`, e o exemplo canônico dele em `tests/data/`. O v1 fica
+   como está.
+2. Em `messaging/topology.py`, um segundo binding da mesma fila para a routing key nova, e
+   `flask rabbitmq setup`.
+3. O consumer aprende a decodificar as duas versões, pelo `schema_version`, e é publicado
+   **primeiro**.
+4. Só então o producer passa a publicar a v2. A porta `TelemetryPublisher.publish` recebe
+   um `TelemetryBatchV1`, e o `messaging/publisher.py` importa o endereço e o `encode` da v1:
+   os dois mudam juntos para a v2, com o serviço que monta o envelope. Quando a fila não tiver
+   mais mensagens v1, o v1 e o binding dele podem sair.
+
+### 11.3 Vínculo novo em `SenderRelation`
+
+`test_os_vinculos_da_v1_sao_os_do_dominio` reprova: os valores da v1 estão escritos no
+contrato, de propósito. Se o consumer já conhece o valor novo (ou o trata como desconhecido
+sem quebrar), acrescente-o a `SENDER_RELATIONS`; senão, é a v2.
+
 ---
 
 ## Checklist de revisão
@@ -684,6 +772,10 @@ E confira:
 - [ ] Dependência externa nova registra a sua sonda, tem campo no `HealthSchema` e está, ou
       não está, no `HEALTH_CRITICAL` de cada perfil por decisão consciente.
 - [ ] Campo novo aparece na API só se estiver no schema.
+- [ ] Mudou o contrato da fila? Campo opcional novo vai com valor padrão e no exemplo
+      canônico; qualquer outra mudança é a v2 (receita 11).
+- [ ] O pipeline (`service/telemetry/`) só recebe adaptadores pelo construtor e não importa
+      infraestrutura (`tests/unit/test_fronteiras.py` reprova).
 - [ ] Teste cobrindo acesso de outro usuário (deve ser **404**) e, se a rota exige uma
       permissão que algum papel não tem, acesso sem ela em cada operação (deve ser **403** —
       `login(role=Role.LEITOR)` na criação; nas escritas sobre registro existente, rebaixe o

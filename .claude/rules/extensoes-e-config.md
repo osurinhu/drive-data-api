@@ -52,5 +52,10 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
 - Constante validada por schema (ex.: limites de paginação) fica com o schema, não na configuração.
 - Comando CLI (`ext/commands.py`): `@click.command` + `@with_appcontext`; serviços saem de
   `current_app.container.x_service()` (o comando não toca repositório nem sessão); erro de domínio
-  vira `click.ClickException(str(erro))`; acrescente o comando à tupla do `init_app`.
+  vira `click.ClickException(str(erro))`; acrescente o comando à tupla do `init_app`. Exceção:
+  o comando de operação de uma infraestrutura (`flask rabbitmq setup`) fica na extensão dona
+  dela, num `AppGroup` com o nome do módulo, registrado no `init_app` (03-como-estender §8): o
+  perfil `[setup]` não carrega o `ext.commands`, que traz banco e container.
 - Container (`ext/container.py`): repositório e serviço novos são dois `providers.Factory`.
+  Adaptador com conexão (o publisher) é `providers.Singleton`, e o que ele recebe do
+  `settings.toml` vem de `config` (`providers.Configuration`), preenchido no `init_app`.

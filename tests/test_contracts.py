@@ -16,8 +16,11 @@ from instrumentation.probes import registered_probes
 from schemas.error_schema import ApiErrorSchema
 from schemas.health_schema import HealthSchema
 from schemas.pagination_schema import PageSchema
+from schemas.telemetry_schema import BatchReceiptSchema, RejectedRecordSchema
 from service.errors import ServiceError
 from service.pagination import Page
+from service.telemetry.ingest_rules import RejectedRecord
+from service.telemetry.ingest_service import IngestReceipt
 
 
 def _concrete_subclasses(cls: type) -> set[type]:
@@ -54,6 +57,14 @@ def test_envelope_de_paginacao_do_servico_e_do_schema_nao_divergem():
     campos_do_schema = set(PageSchema().fields) | {"items"}
 
     assert campos_do_servico == campos_do_schema
+
+
+def test_recibo_do_lote_do_servico_e_do_schema_nao_divergem():
+    """O par do teste acima, para o 202 do envio de telemetria: o serviço devolve
+    `IngestReceipt` (com `RejectedRecord`) e o schema os serializa. Campo
+    renomeado de um lado só sumiria do recibo que o app lê."""
+    assert {f.name for f in fields(IngestReceipt)} == set(BatchReceiptSchema().fields)
+    assert {f.name for f in fields(RejectedRecord)} == set(RejectedRecordSchema().fields)
 
 
 def test_envelope_de_erro_do_codigo_e_do_schema_nao_divergem(app):

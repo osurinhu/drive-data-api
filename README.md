@@ -52,7 +52,8 @@ docker compose up --build
 ```
 
 Isso sobe o PostgreSQL (e cria o banco de testes), o MongoDB e o RabbitMQ. Depois roda o job
-`setup`, que aplica as migrações e termina, e só então inicia os dois processos HTTP: o `api`
+`setup`, que aplica as migrações e a topologia do RabbitMQ (exchange `telemetry` e fila
+`bronze.telemetry`) e termina, e só então inicia os dois processos HTTP: o `api`
 (porta 5000) e o `bronze-api` (porta 5001). O compose falha com mensagem explícita se algum
 segredo do `.env` estiver faltando — nunca sobe com segredo vazio.
 
@@ -82,7 +83,7 @@ requisição seguinte, mesmo com o token já emitido).
 |---|---|---|---|---|
 | `api` | `api` | 5000 | Postgres, RabbitMQ | 503 sem o Postgres; 200 `degraded` sem o RabbitMQ |
 | `bronze-api` | `bronze_api` | 5001 | Postgres, Mongo | 503 sem qualquer um dos dois |
-| `setup` (job) | `setup` | — | Postgres | termina depois de migrar |
+| `setup` (job) | `setup` | — | Postgres, RabbitMQ (API de gerenciamento) | termina depois de migrar e aplicar a topologia |
 
 ```bash
 # obter um token
@@ -92,16 +93,32 @@ curl -X POST http://localhost:5000/api/v1/auth/token \
 
 # usar o token
 curl http://localhost:5000/api/v1/item/ -H "Authorization: Bearer <token>"
+
+# cadastrar um veículo e enviar um lote de leituras dele (202: o lote está na fila)
+curl -X POST http://localhost:5000/api/v1/vehicle/ -H "Authorization: Bearer <token>" \
+  -H 'Content-Type: application/json' -d '{"vin":"93YBSR7RHEJ298116"}'
+curl -X POST http://localhost:5000/api/v1/telemetry/batches -H "Authorization: Bearer <token>" \
+  -H 'Content-Type: application/json' -d '{"records":[{"id":"9f1c2a7e-6b4d-4d0e-9a51-2f6f1b0c8e11",
+  "vin":"93YBSR7RHEJ298116","collected_at":"2026-11-02T14:03:11.482Z",
+  "readings":[{"metric":"rpm","unit":"rpm","available":true,"value":1065.0}]}]}'
 ```
+
+O lote é aceito em parte: o registro de um veículo de que você não é o gestor volta em
+`rejected`, e os outros seguem para a fila. Com o RabbitMQ fora, a resposta é 503 com
+`Retry-After`, e o lote pode ser reenviado inteiro (cada registro é gravado uma vez só, pelo
+`id`). Por enquanto a mensagem fica na fila `bronze.telemetry`, visível no painel: o consumer
+que a grava no bronze é o passo seguinte.
 
 ### Rodando fora do Docker
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
 pip install -r requirements-dev.txt
-# no .env, descomente FLASK_SQLALCHEMY_DATABASE_URI, FLASK_MONGO_URI e FLASK_AMQP_URL
-# (apontam para localhost) e suba as dependências: docker compose up -d db mongo rabbitmq
-cd app && flask run
+# no .env, descomente FLASK_SQLALCHEMY_DATABASE_URI, FLASK_MONGO_URI, FLASK_AMQP_URL e
+# FLASK_AMQP_MANAGEMENT_URL (apontam para localhost) e suba as dependências:
+# docker compose up -d db mongo rabbitmq
+alembic upgrade head                          # o banco, na raiz do repositório
+cd app && flask rabbitmq setup && flask run   # a topologia da fila, depois a API
 ```
 
 Sem `FLASK_PROCESS`, vale o perfil `[default]`, que carrega tudo e por isso pede as três URIs.
@@ -115,11 +132,11 @@ Com `FLASK_PROCESS=api` no `.env`, a aplicação sobe como o processo `api` e ne
 app/
   app.py                  create_app(): factory; não conhece nenhuma extensão
   instrumentation/        observação usada por mais de uma extensão (sondas do health, id da requisição)
-  messaging/              RabbitMQ: conexão, sonda e API de gerenciamento
+  messaging/              RabbitMQ: conexão, sonda, API de gerenciamento, topologia e publisher
   ext/                    infraestrutura — cada módulo expõe init_app(app)
-  domain/                 modelos ORM e o vocabulário puro (papéis e permissões, VIN, portas)
+  domain/                 modelos ORM e o vocabulário puro (papéis e permissões, VIN, portas, contrato da fila)
   repository/             acesso a dados, uma subpasta por tecnologia (sql/: o único lugar que monta SQL)
-  service/                regra de negócio, validação, ownership
+  service/                regra de negócio, validação, ownership; telemetry/: o pipeline, só com portas
   schemas/                contrato de entrada/saída (marshmallow)
   blueprint/              camada HTTP: envelope de erro e, em restapi/v1/, as rotas (uma por recurso)
 migrations/               Alembic
@@ -221,6 +238,7 @@ Valores sensíveis vêm de variáveis de ambiente com prefixo `FLASK_`, carregad
 | `FLASK_SQLALCHEMY_DATABASE_URI` | `SQLALCHEMY_DATABASE_URI` |
 | `FLASK_MONGO_URI` | `MONGO_URI` (processos com `ext.mongo`) |
 | `FLASK_AMQP_URL` | `AMQP_URL` (processos com `ext.rabbitmq`) |
+| `FLASK_AMQP_MANAGEMENT_URL` | `AMQP_MANAGEMENT_URL` (só o `setup`, para o `flask rabbitmq setup`) |
 | `FLASK_PROCESS` | `PROCESS` (o perfil; não é segredo, mas é por processo) |
 | `FLASK_TEST_DATABASE_URI`, `FLASK_TEST_MONGO_URI`, `FLASK_TEST_AMQP_URL`, `FLASK_TEST_AMQP_MANAGEMENT_URL` | usados pela suíte |
 

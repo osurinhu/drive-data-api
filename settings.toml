@@ -65,6 +65,16 @@ AMQP_URL = ""
 AMQP_TIMEOUT_SECONDS = 5
 # O broker derruba a conexão que passar dois intervalos sem sinal.
 AMQP_HEARTBEAT_SECONDS = 60
+# A API de gerenciamento (http://usuario:senha@host:15672), por onde o job setup
+# aplica a topologia (`flask rabbitmq setup`). Vem de FLASK_AMQP_MANAGEMENT_URL, e só
+# o setup a recebe: os processos que publicam ou consomem não têm a credencial de
+# operação.
+AMQP_MANAGEMENT_URL = ""
+
+# --- Ingestão de telemetria (producer) ----------------------------------------
+# O Retry-After do 503 quando a fila não confirma o lote: o app guarda o lote e
+# reenvia depois desse prazo.
+INGEST_RETRY_AFTER_SECONDS = 30
 
 # --- Disponibilidade (/health/) -----------------------------------------------
 # Cada extensão que conecta um serviço registra uma sonda, e o /health/ informa
@@ -120,6 +130,7 @@ API_V1_ROUTES = [
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
     "blueprint.restapi.v1.vehicle",
+    "blueprint.restapi.v1.telemetry",
 ]
 
 
@@ -149,6 +160,7 @@ API_V1_ROUTES = [
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
     "blueprint.restapi.v1.vehicle",
+    "blueprint.restapi.v1.telemetry",
 ]
 # O RabbitMQ fora não tira o processo do balanceador: login e cadastro seguem
 # funcionando, e só o envio de lote responde 503.
@@ -185,11 +197,11 @@ API_V1_ROUTES = []
 # Sem rota, sem /health/: nada aqui é crítico para um health que não existe.
 HEALTH_CRITICAL = []
 
-# Job de preparação (docker/setup.sh): hoje, só as migrações. Elas rodam pelo
-# Alembic, que lê a configuração sem montar a aplicação, então nenhuma extensão
-# além da observabilidade é carregada. As do Mongo e do RabbitMQ entram junto com
-# os comandos de preparação deles (topologia e índices).
+# Job de preparação (docker/setup.sh): as migrações e a topologia do RabbitMQ. As
+# migrações rodam pelo Alembic, que lê a configuração sem montar a aplicação; a
+# topologia, pelo `flask rabbitmq setup`, que o ext.rabbitmq registra. O ext.mongo
+# entra junto com os índices do bronze.
 [setup]
-EXTENSIONS = ["ext.observability"]
+EXTENSIONS = ["ext.observability", "ext.rabbitmq"]
 API_V1_ROUTES = []
 HEALTH_CRITICAL = []

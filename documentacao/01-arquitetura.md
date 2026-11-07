@@ -44,16 +44,17 @@ A mesma imagem roda mais de um processo, e cada um carrega só o que usa. A vari
 sobre as do `[default]`, e uma lista declarada no perfil (`EXTENSIONS`, `API_V1_ROUTES`)
 substitui a do `[default]` inteira. A extensão ou a rota que fica fora da lista do processo não
 é importada, não exige configuração e não aparece no health dele. O container liga só as rotas
-do perfil. Os serviços e repositórios, porém, ficam todos declarados no `ext/container.py`,
-comum aos processos HTTP.
+do perfil. Os serviços, os repositórios e os adaptadores (o publisher, que importa o pika),
+porém, ficam todos declarados no `ext/container.py`, comum aos processos HTTP: o `bronze-api`
+importa o pika sem nunca conectar, porque só a rota de telemetria cria o publisher.
 
 | Perfil | Quem roda | Dependências | Rotas |
 |---|---|---|---|
 | `[default]` (sem `FLASK_PROCESS`) | desenvolvimento local e a suíte de testes | todas: é a união dos perfis | todas |
-| `[api]` | serviço `api` do compose: login e as rotas de negócio; é ele que publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item`, `vehicle` |
+| `[api]` | serviço `api` do compose: login, as rotas de negócio e o recebimento dos lotes de telemetria, que ele publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item`, `vehicle`, `telemetry` |
 | `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que lê o bronze (por enquanto, só login) | Postgres e Mongo | `health`, `auth` |
 | `[consumer]` | o consumer da fila, que grava no bronze (ainda sem serviço no compose) | Mongo e RabbitMQ (sem Postgres e sem JWT) | nenhuma |
-| `[setup]` | o job `setup`: migra e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação | nenhuma |
+| `[setup]` | o job `setup`: migra, aplica a topologia do RabbitMQ e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação; RabbitMQ, pela API de gerenciamento (`flask rabbitmq setup`) | nenhuma |
 
 Um `FLASK_PROCESS` que não é seção do `settings.toml` reprova a subida: sozinho, o Dynaconf
 cairia calado no `[default]`. O `tests/unit/test_composicao.py` fixa as fronteiras. Ele exige
@@ -71,9 +72,9 @@ tempo.
 | Camada | Pasta | Responsabilidade | **Não pode** |
 |---|---|---|---|
 | **Rota** | `app/blueprint/restapi/v1/` | Traduzir HTTP em chamada de serviço. Validar entrada por schema, devolver a saída. | Montar consulta, conter regra de negócio, usar `try/except` para erro de domínio |
-| **Serviço** | `app/service/` | Regra de negócio, validação semântica, ownership, controle de transação. | Tocar no ORM direto, saber o que é HTTP (status, header, request) |
+| **Serviço** | `app/service/` (o pipeline de telemetria em `service/telemetry/`) | Regra de negócio, validação semântica, ownership, controle de transação. O CRUD segue o `BaseService`; o pipeline depende só de portas (`domain/ports.py`) e recebe os adaptadores pelo construtor. | Tocar no ORM direto, saber o que é HTTP (status, header, request). O pipeline, além disso, importar infraestrutura ou adaptador |
 | **Repositório** | `app/repository/` (uma subpasta por tecnologia; hoje, `sql/`) | Única camada que lê e grava dados: o SQL mora em `repository/sql/`. Traduz intenção em consulta. | Conter regra de negócio ou decidir permissão |
-| **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `ports.py`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
+| **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `ports.py`, `contracts/`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
 | **Schema** | `app/schemas/` | Único contrato de entrada e saída da API. Valida e serializa. | Acessar banco |
 
 O primeiro nível de pasta é o papel (a camada). O segundo nível é a tecnologia e só existe
@@ -88,7 +89,7 @@ E a infraestrutura, fora do caminho da requisição:
 | `app/ext/` | Extensões. **Cada módulo expõe exatamente uma função `init_app(app)`** — é essa convenção que permite o carregador tratá-las de forma uniforme. |
 | `app/blueprint/http_errors.py` | Envelope de erro e o mapa exceção → status HTTP. Mora na camada HTTP, fora de `ext/`, porque é usado por duas extensões diferentes e pelas rotas; se morasse numa extensão, a outra passaria a depender dela. |
 | `app/instrumentation/` | Peças de observação usadas por mais de uma extensão: o registro das sondas do health (`probes.py`; cada extensão que conecta um serviço registra a sua, e a rota do health executa as registradas) e o id da requisição (`request_context.py`), que vai para o log e para o envelope de erro. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
-| `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika) e o cliente da API de gerenciamento (`management.py`, só stdlib). Recebe URL e prazos de quem chama e não importa `ext`, `repository` nem `blueprint`. |
+| `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika), o cliente da API de gerenciamento (`management.py`, só stdlib), a topologia (`topology.py`) e o publisher dos lotes (`publisher.py`), que implementa a porta `TelemetryPublisher`. Recebe URL e prazos de quem chama e não importa `ext`, `repository`, `service` nem `blueprint`. |
 
 ---
 
@@ -97,16 +98,19 @@ E a infraestrutura, fora do caminho da requisição:
 ```
 rota      →  serviço, schema, ext, instrumentation
 serviço   →  repositório, domínio
+service.telemetry → folhas do domínio (portas, contrato, VIN), service.errors, service.pagination
 repositório → domínio, ext.database
 domínio   →  o ORM, o SQLAlchemy e o próprio domínio; as folhas, só outras folhas
 schema    →  folhas do domínio
-instrumentation, messaging  →  (nada do projeto)
+messaging →  folhas do domínio (o contrato e as portas)
+instrumentation  →  (nada do projeto)
 ```
 
 As extensões são a raiz de composição e importam das camadas o que precisam montar. Duas
 peças novas são importadas quase só por elas: `instrumentation/`, por qualquer extensão, pela
-rota do health e pelo envelope de erro (`blueprint/http_errors.py`, que lê o id da
-requisição), e `messaging/`, por enquanto só pelo `ext.rabbitmq`.
+rota do health, pelo envelope de erro (`blueprint/http_errors.py`, que lê o id da
+requisição) e pela rota de telemetria (que põe o id no envelope da fila), e `messaging/`, pelo
+`ext.rabbitmq` (a sonda e os comandos) e pelo `ext.container` (o publisher).
 
 Quando a extensão importa `blueprint.http_errors`, a dependência entre os dois pacotes corre
 nos dois sentidos (a rota importa `ext.auth`, que importa `blueprint.http_errors`). Ela fica sem
@@ -128,7 +132,8 @@ Duas regras que valem a pena memorizar:
 2. **A seta nunca aponta para cima.** Serviço não importa rota, repositório não importa
    serviço. Se você sentir essa necessidade, a lógica está na camada errada.
 
-As **folhas do domínio** (`domain/authz.py`, `domain/vin.py`, `domain/ports.py`) são a exceção
+As **folhas do domínio** (`domain/authz.py`, `domain/vin.py`, `domain/ports.py`,
+`domain/contracts/`) são a exceção
 prevista pela regra 1: como só importam outras folhas, qualquer camada pode importá-las
 sem criar ciclo nem acoplar duas camadas uma à outra. É o que permite rota, serviço,
 modelo e schema falarem do mesmo vocabulário de permissões.
@@ -244,6 +249,7 @@ A rota não trata erro. O serviço levanta uma exceção de `app/service/errors.
 | `BusinessRuleError` | 422 |
 | `PermissionDeniedError` | 403 |
 | `AuthenticationError` | 401 |
+| `ServiceUnavailableError` | 503, com `Retry-After` quando a exceção traz o prazo |
 
 Toda resposta de erro tem o mesmo formato, com o `request_id` que também aparece no log:
 
@@ -288,12 +294,14 @@ app/
     request_context.py       id da requisição
   messaging/                 RabbitMQ
     connection.py            parâmetros de conexão (pika) + sonda do broker
-    management.py            cliente da API de gerenciamento (vhosts, permissões)
+    management.py            cliente da API de gerenciamento (vhosts, permissões, topologia)
+    topology.py              exchange, fila e binding da telemetria (aplicados pelo setup)
+    publisher.py             publicação dos lotes com confirmação (porta TelemetryPublisher)
   ext/
     config.py                Dynaconf + perfil do processo + carregador dinâmico de módulos
     database.py              instância do SQLAlchemy + sonda do banco
     mongo.py                 cliente do Mongo (sem conexão até o primeiro uso; um por processo) + sonda
-    rabbitmq.py              configuração AMQP validada na subida + sonda
+    rabbitmq.py              configuração AMQP validada na subida + sonda + `flask rabbitmq setup`
     container.py             container de injeção de dependência
     api.py                   flask-smorest + blueprint /api/v1 + segurança global
     auth.py                  JWT, decorator de permissão, escopo de ownership
@@ -307,6 +315,8 @@ app/
     authz.py                 papéis, permissões e o mapa entre eles (folha)
     vin.py                   formato e forma canônica do VIN (folha)
     ports.py                 portas do pipeline: Protocol e os tipos que trocam (folha)
+    contracts/
+      telemetry_batch.py     contrato da fila v1: envelope, encode/decode e o endereço (folha)
   repository/                uma subpasta por tecnologia
     sql/                     SQLAlchemy: a única parte que monta consulta SQL
       base_repository.py     CRUD genérico
@@ -321,6 +331,9 @@ app/
     user_service.py
     item_service.py
     vehicle_service.py       VIN na forma canônica e imutável
+    telemetry/               o pipeline: só portas e folhas, sem BaseService
+      ingest_rules.py        producer: partição por posse, regras puras
+      ingest_service.py      producer: posse do lote + publicação; o recibo (IngestReceipt)
   schemas/
     pagination_schema.py     parâmetros e envelope de paginação
     error_schema.py          envelope de erro (documentação)
@@ -328,6 +341,7 @@ app/
     auth_schema.py
     item_schema.py
     vehicle_schema.py
+    telemetry_schema.py      o lote do app e o recibo 202
   blueprint/
     http_errors.py           envelope de erro + mapa exceção → HTTP
   blueprint/restapi/v1/
@@ -335,10 +349,12 @@ app/
     auth.py                  token e identidade
     item.py                  CRUD da entidade de exemplo
     vehicle.py               cadastro de veículos (quem cadastra é o gestor)
+    telemetry.py             POST /telemetry/batches: o lote do app, a caminho da fila
 
 migrations/                  Alembic
 tests/                       pytest; a raiz usa Postgres e HTTP, unit/ não usa nada, mongo/ e
-                             rabbitmq/ usam o serviço do nome, e e2e/ usa os três
+                             rabbitmq/ usam o serviço do nome, e e2e/ usa os três; data/
+                             guarda o exemplo canônico do contrato da fila
 docker/                      entrypoint.sh, setup.sh (o job de preparação) e uma pasta por
                              serviço de terceiros (postgres/initdb/)
 settings.toml                configuração (sem segredos), as duas listas de módulos e um perfil

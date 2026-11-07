@@ -17,7 +17,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | Arquivo | Para quê | Carrega quando |
 |---|---|---|
 | `CLAUDE.md` | fontes de verdade, invariantes, armadilhas do ambiente, fluxo | toda sessão |
-| `rules/rotas.md`, `servicos.md`, `repositorios.md`, `schemas.md`, `dominio.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `mensageria.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
+| `rules/rotas.md`, `servicos.md`, `servicos-telemetria.md`, `repositorios.md`, `schemas.md`, `dominio.md`, `contratos.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `mensageria.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
 | `rules/infra.md`, `documentacao.md`, `pasta-claude.md` | Docker, CI e dependências; manutenção da doc; manutenção desta pasta | idem |
 | `skills/verificar/` (`SKILL.md` + `verificar.sh`) | `/verificar`: as etapas do CI, no Docker | `/verificar`, ou quando o Claude for testar |
 | `skills/migracao/` | `/migracao`: gerar, revisar e validar migração Alembic | `/migracao`, ou ao mudar modelo |
@@ -213,3 +213,44 @@ que muda uma regra de projeto e por isso é decisão do usuário:
     - a `dominio.md` (e a `mensageria.md`, que já faltava) entrou no mapa e na lista do revisor.
   - **Fim de linha:** o `smoke.sh` estava com CRLF no disco, apesar do `eol=lf`. O conteúdo no
     git era o mesmo; voltou para LF com `sed -i 's/\r$//'`.
+- **2026-11-07 — passo 1.3 do pipeline (o producer publicando).** O contrato
+  `telemetry.batch.v1`, a rota `POST /telemetry/batches`, o serviço do pipeline, o publisher e a
+  topologia (`flask rabbitmq setup` no job `setup`).
+  - **Desvios do plano:**
+    - a topologia nasce sem DLX, DLQ e policy: o primeiro uso deles é o consumer (1.4) e a
+      contrapressão (Fase 5). A fila já é quorum, porque o tipo não muda depois;
+    - o publisher já reabre uma vez a conexão reaproveitada que falha, adiantado da Fase 5: sem
+      isso, o primeiro lote depois de um worker ocioso daria 503;
+    - o contrato tem os próprios `SENDER_RELATIONS`, em vez de importar o `SenderRelation`: um
+      vínculo novo no domínio não muda a v1 por tabela, e um teste compara os dois;
+    - as datas do envelope são `isoformat()` com microssegundos e `+00:00`, e não o `Z` do
+      exemplo do plano: é o que o marshmallow escreve e lê sem formato próprio;
+    - o formato do lote é o básico (UUID, VIN, data com fuso, limites de contagem, padrão da
+      métrica). Tipos estritos, `available` ⇔ `value`, unicidade e o 413 ficam para a Fase 4;
+    - a regra de fronteira do pipeline (`service/telemetry/` só com portas, folhas e
+      `service.errors`/`pagination`) nasceu já agora no `test_fronteiras.py`, e não no 1.4;
+    - o `api` deixou de depender direto do `rabbitmq` no compose: depende do `setup`, que espera
+      o broker;
+    - o `setup` dá ao usuário da `AMQP_URL` permissão `.*` no vhost, até os usuários por
+      processo da Fase 7;
+    - `RABBITMQ_VHOST` no compose (padrão `drive-data`) para o smoke usar um vhost descartável.
+      O `RABBITMQ_DEFAULT_VHOST` continua fixo, para não recriar o container do broker.
+  - **Regras:** nascem `rules/contratos.md` e `rules/servicos-telemetria.md`; a
+    `mensageria.md` ganhou o publisher, a topologia e a API de gerenciamento com POST; a
+    `dominio.md` cita o `contracts/`; a `testes.md`, as fixtures de fila e o padrão do
+    `override`. Valem a partir da sessão seguinte.
+  - **Ambiente:**
+    - a contagem de mensagens de fila quorum no `rabbitmqctl list_queues` atrasa alguns
+      segundos. O smoke achou 0 logo depois do 202 confirmado; passou a esperar até 15 s;
+    - editar `.sh` por heredoc do Python deixou um CR solto e comeu uma continuação de linha
+      (`\` + quebra). Script com barra invertida vai em arquivo no scratchpad, não em heredoc.
+  - **Revisão** (`revisor-arquitetura`, sem bloqueantes). Um achado importante, corrigido: o
+    `flask rabbitmq setup` mora no `ext/rabbitmq.py`, e a receita 8 dizia que todo comando vai
+    no `ext/commands.py`. Virou regra, em 03 §8, em 02-decisoes (job `setup`) e em
+    `extensoes-e-config.md`: o comando de operação de uma infraestrutura fica na extensão dona
+    dela, porque o perfil `[setup]` não carrega o `ext.commands`. As sugestões também entraram:
+    o `Singleton` e o `providers.Configuration` em 03 §1.6 e na regra; o pika importado pelo
+    container em todo processo HTTP, registrado em 01; o 403 também com o `leitor`; o
+    `__init__.py` sem import conferido em `domain/contracts/` e `service/telemetry/`; a v2 da
+    §11.2 cita a porta e o publisher. Ficou de fora o `Retry-After` no OpenAPI: o
+    `error_responses` não declara header, e a descrição da rota já o explica.

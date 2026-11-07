@@ -135,8 +135,8 @@ aio-pika e o Motor, assíncronos, sem ganho numa aplicação síncrona. E um ODM
 o MongoEngine: o bronze guarda o documento cru, e uma camada de modelo só atrapalharia.
 
 ### API de gerenciamento do RabbitMQ com a stdlib
-Vhosts e permissões são aplicados pela API HTTP de gerenciamento, com PUTs idempotentes
-(`messaging/management.py`, com `urllib`).
+Vhosts, permissões e a topologia são aplicados pela API HTTP de gerenciamento, com pedidos
+idempotentes (`messaging/management.py`, com `urllib`).
 **Descartado:** o `requests`, que seria uma dependência de runtime nova só para alguns PUTs.
 Também o `rabbitmqadmin` e o `rabbitmqctl`, CLIs que precisariam estar na imagem ou exigiriam
 entrar no container do broker.
@@ -241,6 +241,86 @@ a regra existe uma única vez, para todos os serviços.
 ### Handler de `Exception` que **não** engole `HTTPException`
 Um handler genérico que capturasse `HTTPException` destruiria as respostas 422 de validação
 do smorest e todo `abort()`, trocando-as por um 500 opaco.
+
+## Pipeline de telemetria
+
+O app envia lotes de leituras ao `api` (o producer), que os publica no RabbitMQ; o consumer
+grava no bronze (Mongo), e a silver lê pelo `bronze-api`. A fila é a única ligação entre o
+producer e o consumer.
+
+### A posse é conferida no producer, registro a registro; o formato reprova o lote
+O schema reprova o lote inteiro com 422 quando o formato está errado: é quebra de contrato do
+app. A posse é regra de negócio, decidida por registro: o `TelemetryIngestService` faz **uma**
+consulta (`authorized_vins`) para os VINs do lote. Os registros de veículos do remetente vão
+para a fila, e os outros voltam no 202 com `vehicle_not_authorized`, um motivo só, que não
+revela se o VIN é de outra pessoa.
+O remetente é o usuário do token. O campo `user` do payload fica gravado em `raw` e vira só um
+indicador (`payload_user_matches_sender`); nunca autoriza nada. Não existe "enviar de todos":
+ninguém envia por outro.
+**Por que no producer:** é onde a identidade existe, e a posse vale no momento do envio, sem
+depender do atraso da fila. O consumer não lê veículos.
+**Descartado:** revalidar a posse no consumer, que exigiria uma projeção dos veículos no lado
+dele ou uma segunda ligação com o Postgres; rejeitar o lote inteiro quando um VIN não é do
+remetente, que faria o app perder os registros bons.
+
+### Um envelope por lote aceito
+O producer publica **uma** mensagem por requisição, só com os registros autorizados, e cada
+registro leva o veredito (`vehicle_id`, `sender_relation`) e o bruto (`raw`).
+**Por quê:** cada publicação espera a confirmação do broker, e no `BlockingChannel` do pika
+isso é uma ida e volta por mensagem. Com o envelope, o lote é publicado inteiro ou não é: o
+202 e o 503 são atômicos. A idempotência continua por registro (o `id` do app), então
+reentregas e reenvios são seguros.
+**Descartado:** uma mensagem por registro (500 confirmações síncronas por lote, e publicação
+parcial para explicar ao app).
+
+### O 202 só sai depois da confirmação do broker; sem ela, 503 com `Retry-After`
+O `RabbitTelemetryPublisher` publica com *publisher confirms*, `mandatory` e mensagem
+persistente. Broker fora, mensagem sem fila para a routing key ou recusa (fila cheia) viram
+`PublishFailed`, que o serviço traduz em `ServiceUnavailableError`: 503, com
+`Retry-After: INGEST_RETRY_AFTER_SECONDS`. O app guarda o lote e reenvia inteiro.
+Uma conexão por processo, aberta na primeira publicação (depois do fork) e reaproveitada.
+A conexão reaproveitada que falha é reaberta **uma** vez: o broker derruba a conexão ociosa
+por falta de heartbeat, e o worker só descobre ao publicar. A conexão recém-aberta que falha
+não é repetida, porque aí o broker está fora mesmo, e repetir só dobraria a espera do app.
+**Descartado:** responder 202 antes da confirmação (o dado se perde se o producer cair logo
+depois); guardar o lote em disco no producer para publicar depois (uma segunda fila, sem as
+garantias da primeira).
+
+### O contrato da fila é uma folha versionada, com valores próprios
+`domain/contracts/telemetry_batch.py` tem o envelope (dataclasses), o `encode`/`decode` e o
+endereço (`EXCHANGE`, `ROUTING_KEY`). O decoder ignora campo desconhecido (*tolerant reader*):
+campo novo e opcional não muda a versão. Remover, renomear ou mudar o significado de um campo
+cria a v2, com routing key própria.
+Os vínculos que a v1 aceita (`SENDER_RELATIONS`) são escritos no contrato, e não importados de
+`SenderRelation`: um vínculo novo no domínio não pode mudar a v1 por tabela.
+`tests/unit/test_contrato_telemetria.py` reprova quando os dois divergem, e o exemplo canônico
+(`tests/data/telemetry_batch_v1.json`) fixa o formato no fio.
+**Por que o endereço no contrato:** o producer não precisa conhecer a topologia
+(`messaging/topology.py`), e "producer e consumer só compartilham folhas" fica verdade.
+**Descartado:** o contrato importar o enum do domínio (a v1 mudaria sem ninguém decidir);
+validar o VIN no decoder, que é trabalho do serviço do consumer.
+
+### O pipeline não herda o `BaseService`: depende só de portas
+`service/telemetry/` não é CRUD. O `TelemetryIngestService` recebe a posse
+(`VehicleAuthorization`) e a fila (`TelemetryPublisher`) pelo construtor, e quem escolhe os
+adaptadores é o container. As regras puras (a partição, o indicador do `user`) ficam em
+`ingest_rules.py`, sem estado. Nada ali importa `flask`, `pika`, `pymongo`, `sqlalchemy` ou um
+adaptador.
+**Por quê:** cada regra se testa com dublês em memória (`tests/unit/test_ingestao.py`), e o
+consumer vai importar o lado dele sem carregar o do producer.
+**Rede de segurança:** `tests/unit/test_fronteiras.py` confere os imports do pacote por lista
+de permitidos.
+
+### A topologia é aplicada pelo job `setup`, nunca pelos processos
+Exchange, fila e binding são declarados num lugar só (`messaging/topology.py`) e aplicados pelo
+`flask rabbitmq setup`, pela API de gerenciamento, de forma idempotente. O producer e o
+consumer só usam a topologia: nenhum dos dois declara nada, e nenhum depende de o outro ter
+subido antes. Só o `setup` recebe a credencial de operação (`AMQP_MANAGEMENT_URL`).
+A fila é *quorum*, replicada e durável. O tipo não muda depois da criação. Os limites (DLQ,
+número de entregas, tamanho) vão por policy, que muda sem recriar a fila.
+**Descartado:** cada processo declarar o que usa na subida (cada um precisaria de permissão
+de configurar o broker, e os argumentos se espalhariam por dois lugares); fila clássica (sem
+limite de entregas nem replicação).
 
 ---
 
@@ -417,8 +497,13 @@ worker, mas quebra em silêncio no dia em que alguém ligar o `--preload`.
 Com dois processos HTTP, e réplicas deles, migrar na subida faria vários `alembic upgrade`
 disputarem o mesmo banco vazio. O serviço `setup` do compose (`docker/setup.sh`) migra e
 termina. O `api` e o `bronze-api` sobem com `RUN_MIGRATIONS=0` e só depois que o `setup`
-termina com sucesso (`service_completed_successfully`). É também onde entram a topologia do
-RabbitMQ e os índices do Mongo, quando existirem.
+termina com sucesso (`service_completed_successfully`). Ele também aplica a topologia do
+RabbitMQ (`flask rabbitmq setup`), e por isso espera o broker ficar saudável; os índices do
+Mongo entram quando existirem.
+**Por que o comando mora no `ext/rabbitmq.py`, e não no `ext/commands.py`:** o perfil
+`[setup]` carrega só o `ext.observability` e o `ext.rabbitmq`, e o `ext.commands` traria o
+banco e o container. O comando de operação fica na extensão dona da infraestrutura, num grupo
+com o nome do módulo (`flask rabbitmq …`, e depois `flask mongo …`).
 **O padrão do entrypoint continua `RUN_MIGRATIONS=1`:** um container avulso da imagem, como o
 do `/smoke-api`, migra sozinho, como sempre fez.
 **Descartado:** migrar na subida de cada processo com uma trava no banco

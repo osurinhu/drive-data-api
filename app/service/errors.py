@@ -29,3 +29,15 @@ class PermissionDeniedError(ServiceError):
 
 class AuthenticationError(ServiceError):
     """Credenciais inválidas."""
+
+
+class ServiceUnavailableError(ServiceError):
+    """Uma dependência da operação está fora; a mesma requisição pode dar certo depois.
+
+    ``retry_after`` (em segundos) vira o header ``Retry-After`` da resposta 503:
+    é o que diz ao cliente quando repetir.
+    """
+
+    def __init__(self, message: str = "", *, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after

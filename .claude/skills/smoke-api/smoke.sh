@@ -12,6 +12,9 @@
 #     aplicação não sobe num banco vazio, o smoke falha antes da primeira requisição.
 #   * O perfil é o do serviço `api` do compose (FLASK_PROCESS=api): o health precisa
 #     mostrar o banco e o RabbitMQ, e não o Mongo, que esse processo não usa.
+#   * O RabbitMQ também é descartável: um vhost próprio (RABBITMQ_VHOST, outra
+#     interpolação do compose), preparado pelo `flask rabbitmq setup` de verdade, no
+#     serviço `setup`, e apagado no fim. A fila do desenvolvimento não recebe nada.
 #   * Cada requisição leva um X-Request-ID próprio (smoke-<execução>-NN): a falha
 #     vem acompanhada das linhas do log com o mesmo id.
 #   * Um usuário por papel, criado pelo `flask create-user` com senha aleatória.
@@ -30,8 +33,9 @@ Uso (a partir da raiz do repositório):
 
 Sobe o código atual num container avulso do `api`, com banco descartável, e
 confere por HTTP: health (com o perfil api: banco e RabbitMQ), OpenAPI, login,
-CRUD de item e de veículo, a matriz 401/403/404/409/422 e o X-Request-ID no header, no
-envelope de erro e no log de acesso.
+CRUD de item e de veículo, o envio de lote de telemetria (202 e a mensagem na fila),
+a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log
+de acesso.
 
 Saída: 0 = tudo OK; 1 = alguma verificação falhou (ou a aplicação não subiu);
        2 = infraestrutura (Docker parado, build quebrado, banco fora do ar).
@@ -51,13 +55,24 @@ raiz="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 cd "$raiz" || exit 2
 
 container="base-api-smoke"
+vhost="drive-data-smoke"
 tmp="$(mktemp -d)"
 # curl é programa nativo no Windows: os arquivos dele precisam de caminho C:/...
 if command -v cygpath >/dev/null 2>&1; then tmp="$(cygpath -m "$tmp")"; fi
 banco=""
+broker_no_ar=0
+
+# rabbitmqctl dentro do container do broker, como o usuário `rabbitmq` (o cookie
+# do Erlang é dele; ver o healthcheck no compose). Não precisa de senha nenhuma.
+rabbitmqctl() {
+  docker compose exec -T rabbitmq gosu rabbitmq rabbitmqctl -q "$@"
+}
 
 limpar() {
   docker rm -f "$container" >/dev/null 2>&1
+  if [ "$broker_no_ar" -eq 1 ]; then
+    rabbitmqctl delete_vhost "$vhost" >/dev/null 2>&1
+  fi
   if [ -n "$banco" ]; then
     docker compose exec -T db sh -s -- "$banco" >/dev/null 2>&1 <<'APAGAR_BANCO' ||
 psql -q -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS \"$1\" WITH (FORCE)"
@@ -86,12 +101,24 @@ falha_app() {
 docker version --format '{{.Server.Version}}' >/dev/null 2>&1 ||
   falha_infra "Docker indisponível — abra o Docker Desktop e rode de novo."
 
-echo ">> build da imagem do api com o código atual..."
-docker compose build -q api >"$tmp/build.log" 2>&1 ||
-  falha_infra "o build da imagem do api falhou." "$tmp/build.log"
+echo ">> build das imagens do api e do setup com o código atual..."
+docker compose build -q api setup >"$tmp/build.log" 2>&1 ||
+  falha_infra "o build das imagens falhou." "$tmp/build.log"
 
 docker compose up -d --wait db rabbitmq >"$tmp/db.log" 2>&1 ||
   falha_infra "o banco ou o RabbitMQ não subiu." "$tmp/db.log"
+broker_no_ar=1
+
+# Sobra de uma execução interrompida: a fila precisa começar vazia.
+rabbitmqctl delete_vhost "$vhost" >/dev/null 2>&1
+echo ">> flask rabbitmq setup no vhost descartável $vhost..."
+if ! RABBITMQ_VHOST="$vhost" docker compose run --rm --no-deps -T --entrypoint flask \
+  setup rabbitmq setup >"$tmp/topologia.log" 2>&1; then
+  echo "FALHOU  flask rabbitmq setup:"
+  tail -n 20 "$tmp/topologia.log" | sed 's/^/        /'
+  echo "RESULTADO: FALHOU — flask rabbitmq setup"
+  exit 1
+fi
 
 nome="$(docker compose exec -T db printenv POSTGRES_DB 2>/dev/null | tr -d '\r')"
 [ -n "$nome" ] || falha_infra "não consegui ler POSTGRES_DB do container db."
@@ -106,7 +133,7 @@ CRIAR_BANCO
 
 docker rm -f "$container" >/dev/null 2>&1 # sobra de uma execução interrompida
 echo ">> container avulso do api no banco $banco (migrações do zero)..."
-POSTGRES_DB="$banco" docker compose run -d -T --no-deps --name "$container" \
+POSTGRES_DB="$banco" RABBITMQ_VHOST="$vhost" docker compose run -d -T --no-deps --name "$container" \
   -e RUN_MIGRATIONS=1 --publish 127.0.0.1::5000 api >"$tmp/run.log" 2>&1 ||
   falha_infra "o docker compose run do api falhou." "$tmp/run.log"
 
@@ -237,6 +264,40 @@ confere 422 "VIN inválido" POST /vehicle/ "$token_usuario" '{"vin":"93YBSR7RHEJ
 confere 403 "silver não cadastra" POST /vehicle/ "$token_silver" '{"vin":"9BWZZZ377VT004251"}'
 confere 404 "outro não vê o veículo" GET "/vehicle/$veiculo" "$token_gerente"
 confere 200 "admin altera o veículo" PATCH "/vehicle/$veiculo" "$token_admin" '{"nickname":"smoke"}'
+
+# Telemetria: o lote é aceito em parte (o VIN do gestor vai para a fila; o alheio
+# volta no recibo), a silver não envia, e o formato inválido reprova o lote inteiro.
+leitura='"collected_at":"2026-11-07T12:00:00Z","readings":[{"metric":"rpm","unit":"rpm","available":true,"value":800.0}]'
+lote="{\"records\":[{\"id\":\"00000000-0000-4000-8000-00000000000a\",\"vin\":\"$vin\",$leitura},"
+lote+="{\"id\":\"00000000-0000-4000-8000-00000000000b\",\"vin\":\"9BWZZZ377VT004251\",$leitura}]}"
+if confere 202 "lote aceito em parte" POST /telemetry/batches "$token_usuario" "$lote"; then
+  total=$((total + 1))
+  if [ "$(campo accepted)" = "1" ] && grep -q '"vehicle_not_authorized"' "$tmp/corpo"; then
+    echo "OK      recibo: 1 aceito, o VIN alheio em rejected"
+  else
+    falhas=$((falhas + 1))
+    echo "FALHOU  recibo: $(head -c 300 "$tmp/corpo")"
+  fi
+fi
+confere 403 "silver não envia" POST /telemetry/batches "$token_silver" "$lote"
+confere 422 "lote vazio" POST /telemetry/batches "$token_usuario" '{"records":[]}'
+
+# O 202 só sai depois da confirmação do broker: a mensagem já está na fila. A
+# contagem que o rabbitmqctl lê de uma fila quorum é atualizada a cada poucos
+# segundos, e por isso a espera.
+total=$((total + 1))
+for _ in $(seq 1 15); do
+  na_fila="$(rabbitmqctl list_queues -p "$vhost" --no-table-headers name messages 2>/dev/null |
+    tr -d '\r' | awk '$1 == "bronze.telemetry" { print $2 }')"
+  [ "$na_fila" = "1" ] && break
+  sleep 1
+done
+if [ "$na_fila" = "1" ]; then
+  echo "OK      fila bronze.telemetry do vhost $vhost com 1 mensagem"
+else
+  falhas=$((falhas + 1))
+  echo "FALHOU  fila bronze.telemetry: esperava 1 mensagem, encontrei '${na_fila:-nada}'"
+fi
 confere 200 "gestor exclui veículo" DELETE "/vehicle/$veiculo" "$token_usuario"
 confere 404 "veículo excluído some" GET "/vehicle/$veiculo" "$token_usuario"
 

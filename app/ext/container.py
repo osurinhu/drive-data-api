@@ -1,6 +1,7 @@
 """Container de injeção de dependência.
 
-Declara num lugar só como o grafo de objetos é montado (repository → service).
+Declara num lugar só como o grafo de objetos é montado (repository → service, e
+os adaptadores, como o publisher, → os serviços do pipeline).
 A rota recebe o service pronto via ``@inject`` + ``Provide[Container.x]``, o que
 permite trocar qualquer peça por um dublê nos testes.
 """
@@ -8,11 +9,13 @@ permite trocar qualquer peça por um dublê nos testes.
 from dependency_injector import containers, providers
 from flask import Flask
 
+from messaging.publisher import RabbitTelemetryPublisher
 from repository.sql.item_repository import ItemRepository
 from repository.sql.user_repository import UserRepository
 from repository.sql.vehicle_repository import VehicleRepository
 from service.auth_service import AuthService
 from service.item_service import ItemService
+from service.telemetry.ingest_service import TelemetryIngestService
 from service.user_service import UserService
 from service.vehicle_service import VehicleService
 
@@ -22,20 +25,53 @@ class Container(containers.DeclarativeContainer):
     # inteiro traria para o processo as rotas de outros perfis. O `init_app` liga
     # só as rotas do perfil.
 
+    #: Os valores do settings.toml que os adaptadores recebem no construtor
+    #: (preenchidos pelo `init_app`).
+    config = providers.Configuration()
+
     # --- Repositories ---------------------------------------------------------
     user_repository = providers.Factory(UserRepository)
     item_repository = providers.Factory(ItemRepository)
     vehicle_repository = providers.Factory(VehicleRepository)
+
+    # --- Mensageria -----------------------------------------------------------
+    # Singleton: uma conexão por processo, aberta na primeira publicação. Só o
+    # processo que serve a rota de telemetria chega a criá-lo.
+    telemetry_publisher = providers.Singleton(
+        RabbitTelemetryPublisher,
+        url=config.amqp.url,
+        timeout=config.amqp.timeout,
+        heartbeat=config.amqp.heartbeat,
+        connection_name=config.amqp.publisher_connection_name,
+    )
 
     # --- Services -------------------------------------------------------------
     user_service = providers.Factory(UserService, repository=user_repository)
     auth_service = providers.Factory(AuthService, repository=user_repository)
     item_service = providers.Factory(ItemService, repository=item_repository)
     vehicle_service = providers.Factory(VehicleService, repository=vehicle_repository)
+    telemetry_ingest_service = providers.Factory(
+        TelemetryIngestService,
+        authorization=vehicle_repository,
+        publisher=telemetry_publisher,
+        retry_after_seconds=config.ingest.retry_after_seconds,
+    )
 
 
 def init_app(app: Flask) -> None:
     container = Container()
+    process = app.config.get("PROCESS") or "default"
+    container.config.from_dict(
+        {
+            "amqp": {
+                "url": str(app.config.get("AMQP_URL") or ""),
+                "timeout": float(app.config["AMQP_TIMEOUT_SECONDS"]),
+                "heartbeat": int(app.config["AMQP_HEARTBEAT_SECONDS"]),
+                "publisher_connection_name": f"drive-data:{process}:publisher",
+            },
+            "ingest": {"retry_after_seconds": int(app.config["INGEST_RETRY_AFTER_SECONDS"])},
+        }
+    )
     # Resolve os marcadores Provide[...] das rotas que este processo registra
     # (API_V1_ROUTES do perfil), e só delas.
     container.wire(modules=list(app.config["API_V1_ROUTES"]))

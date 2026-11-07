@@ -21,7 +21,16 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
   `headers` (usuário comum já autenticado); `make_user(...)` → dict; `set_role(nome, papel)` troca o
   papel sem reemitir o token; `sql_log` (lista do SQL emitido — chame `.clear()` depois do preparo);
   `mongo_db` (o banco `<MONGO_DATABASE>_test`); `amqp_url`, `amqp_management_url`,
-  `amqp_management` e `amqp_vhost` (o vhost `drive-data-test`, criado pela API de gerenciamento).
+  `amqp_management` e `amqp_vhost` (o vhost `drive-data-test`, criado pela API de gerenciamento);
+  `amqp_topology` (a topologia aplicada nele por `topology.apply`); `bronze_queue` (a fila vazia
+  no começo; chamada, devolve e tira as mensagens como `(propriedades, corpo)`);
+  `fila_em_memoria` (o dublê `FilaEmMemoria` do `TelemetryPublisher`, com `publicados` e
+  `falhar`).
+- A rota usa o dublê por `app.container.<provider>.override(providers.Object(dublê))`, com
+  `reset_override()` na saída (fixture `fila` de `tests/test_telemetry.py`). O adaptador contra
+  o broker de verdade fica para `tests/rabbitmq/` e `tests/e2e/`; na raiz, só apontado para uma
+  porta fechada (o 503 com o broker fora). Dado de teste fixo (o exemplo canônico do
+  contrato) mora em `tests/data/`.
 - As tabelas são esvaziadas após cada teste, e em `tests/mongo/` também as coleções: a ordem não
   importa, mas não presuma ids.
 - O banco de testes nasce de `create_all()`, não das migrações: teste verde não prova que a

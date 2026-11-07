@@ -16,12 +16,19 @@ from werkzeug.exceptions import HTTPException
 
 from blueprint.http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
 from instrumentation.request_context import current_request_id
-from service.errors import ServiceError
+from service.errors import ServiceError, ServiceUnavailableError
+
+
+def _headers_for(error: Exception) -> dict[str, str]:
+    if isinstance(error, ServiceUnavailableError) and error.retry_after:
+        return {"Retry-After": str(error.retry_after)}
+    return {}
 
 
 def _handler_for(status: int) -> Callable:
     def handler(error: Exception):
-        return error_response(status, str(error) or STATUS_DESCRIPTION[status])
+        message = str(error) or STATUS_DESCRIPTION[status]
+        return error_response(status, message, headers=_headers_for(error))
 
     return handler
 

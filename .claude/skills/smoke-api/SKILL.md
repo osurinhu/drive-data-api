@@ -1,6 +1,6 @@
 ---
 name: smoke-api
-description: Sobe a API real no Docker com o código atual e a confere por HTTP de ponta a ponta — health, OpenAPI, login JWT, CRUD de item, a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log de acesso — num container avulso com banco descartável, sem tocar nos dados do banco de desenvolvimento nem no api que já está rodando. Use para ver uma mudança funcionando na aplicação de verdade (não só nos testes); antes de concluir mudança em rota, autenticação, configuração, Dockerfile, entrypoint, dependências ou migração; e quando pedirem para rodar, subir ou testar a API.
+description: Sobe a API real no Docker com o código atual e a confere por HTTP de ponta a ponta — health, OpenAPI, login JWT, CRUD de item e de veículo, o envio de lote de telemetria (202 e a mensagem na fila), a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log de acesso — num container avulso com banco e vhost do RabbitMQ descartáveis, sem tocar nos dados do banco de desenvolvimento, na fila de desenvolvimento nem no api que já está rodando. Use para ver uma mudança funcionando na aplicação de verdade (não só nos testes); antes de concluir mudança em rota, autenticação, configuração, Dockerfile, entrypoint, dependências ou migração; e quando pedirem para rodar, subir ou testar a API.
 allowed-tools: Bash(bash .claude/skills/smoke-api/smoke.sh *)
 ---
 
@@ -14,19 +14,25 @@ HTTP de verdade. Rode a partir da raiz do repositório:
 bash .claude/skills/smoke-api/smoke.sh
 ```
 
-Leva cerca de 30 s. O roteiro:
+Leva cerca de 40 s. O roteiro:
 
-1. reconstrói a imagem `api` com o código atual (é a mesma do `docker compose up`);
-2. sobe o `db` e o `rabbitmq` do compose, cria o banco `<POSTGRES_DB>_smoke` e sobe um
-   container avulso (`base-api-smoke`, porta aleatória em 127.0.0.1) apontado para ele. O
-   container roda no perfil `api` e migra pelo entrypoint (`RUN_MIGRATIONS=1`), sem o job
-   `setup`. O health confere o perfil: `database` e `rabbitmq` ok, sem chave `mongo`;
-3. cria um usuário por papel com `flask create-user` e senha aleatória;
-4. roda a matriz, cada requisição com um `X-Request-ID` próprio (`smoke-<execução>-NN`);
-5. confere que o id volta no header e no envelope de erro e aparece no log de acesso;
-6. apaga o container e o banco, também quando falha ou é interrompido.
+1. reconstrói as imagens `api` e `setup` com o código atual (as mesmas do `docker compose up`);
+2. sobe o `db` e o `rabbitmq` do compose e aplica a topologia num vhost descartável
+   (`drive-data-smoke`) com o `flask rabbitmq setup` de verdade, no serviço `setup`
+   (`RABBITMQ_VHOST`, uma interpolação do compose);
+3. cria o banco `<POSTGRES_DB>_smoke` e sobe um container avulso (`base-api-smoke`, porta
+   aleatória em 127.0.0.1) apontado para ele e para o vhost. O container roda no perfil `api` e
+   migra pelo entrypoint (`RUN_MIGRATIONS=1`), sem o job `setup`. O health confere o perfil:
+   `database` e `rabbitmq` ok, sem chave `mongo`;
+4. cria um usuário por papel com `flask create-user` e senha aleatória;
+5. roda a matriz, cada requisição com um `X-Request-ID` próprio (`smoke-<execução>-NN`). A
+   telemetria envia um lote misto (o VIN do gestor e um alheio): 202 com `accepted: 1` e o
+   alheio em `rejected`, e a fila `bronze.telemetry` do vhost com 1 mensagem. A contagem de
+   fila quorum no `rabbitmqctl` atrasa alguns segundos, por isso o smoke espera até 15 s;
+6. confere que o id volta no header e no envelope de erro e aparece no log de acesso;
+7. apaga o container, o banco e o vhost, também quando falha ou é interrompido.
 
-O `api` e o banco de desenvolvimento não são tocados. Mas a imagem `api` fica reconstruída:
+O `api`, o banco de desenvolvimento e o vhost `drive-data` não são tocados. Mas a imagem `api` fica reconstruída:
 o próximo `docker compose up -d` recria o `api` com o código que estava no disco.
 
 ## Lendo o resultado
@@ -37,12 +43,14 @@ o próximo `docker compose up -d` recria o `api` com o código que estava no dis
 | `FALHOU` numa linha da matriz (código 1) | status diferente do esperado; a linha traz o corpo da resposta e, abaixo, as linhas do log com o mesmo `req=` | trate como bug da aplicação: reproduza com um teste (`/verificar testes ...`) antes de corrigir |
 | `a aplicação não subiu` (código 1) | o container parou ou o health não deu 200 em 90 s; vem o fim do log | migração que falha num banco vazio, import quebrado ou configuração obrigatória faltando |
 | `houve 5xx` | erro interno; o fim do log traz o traceback com `[req=...]` | o traceback aponta o arquivo |
+| `FALHOU  flask rabbitmq setup` | a topologia não se aplicou no vhost descartável; vem o log do comando | a API de gerenciamento recusou (o motivo vem na mensagem) ou falta configuração no serviço `setup` |
 | `INFRA:` (código 2) | Docker parado, build quebrado, banco fora do ar | resolva o ambiente; não é falha do código |
 
 ## Quando a matriz precisa mudar
 
-A matriz cobre `Item`, que é o molde, e `Vehicle` (VIN único entre todos os donos, 403 da
-`silver`, escopo do admin). Entidade nova com rota própria ganha as linhas dela,
+A matriz cobre `Item`, que é o molde, `Vehicle` (VIN único entre todos os donos, 403 da
+`silver`, escopo do admin) e o envio de lote (202 parcial com a mensagem na fila, 403 da
+`silver`, 422 do lote vazio). Entidade nova com rota própria ganha as linhas dela,
 copiando as de item: criação, 403 do `leitor`, 404 do alheio, escopo do gerente e do admin.
 Mantenha a matriz curta. O pytest cobre os detalhes; o smoke prova que a aplicação de verdade
 responde. Mudou uma regra de status (uma rota passou a ser pública, por exemplo)? Ajuste a linha

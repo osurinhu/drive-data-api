@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "message_id": "4b0f6c1e-0a8e-4f43-9a36-0c7f3b2a9d10",
+  "received_at": "2026-11-02T14:05:00.118000+00:00",
+  "request_id": "a3f1c9d24e6b4f0e9c1d2b3a4f5e6d7c",
+  "sender": {"user_id": 51},
+  "records": [
+    {
+      "record_id": "9f1c2a7e-6b4d-4d0e-9a51-2f6f1b0c8e11",
+      "vin": "93YBSR7RHEJ298116",
+      "vehicle_id": 7,
+      "sender_relation": "driver",
+      "collected_at": "2026-11-02T14:03:11.482000+00:00",
+      "payload_user_matches_sender": false,
+      "raw": {
+        "id": "9f1c2a7e-6b4d-4d0e-9a51-2f6f1b0c8e11",
+        "vin": "93YBSR7RHEJ298116",
+        "collected_at": "2026-11-02T14:03:11.482Z",
+        "user": "admin",
+        "readings": [
+          {"metric": "rpm", "unit": "rpm", "available": true, "value": 1065.0},
+          {"metric": "speed", "unit": "km/h", "available": false, "value": null}
+        ]
+      }
+    }
+  ]
+}

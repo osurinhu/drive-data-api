@@ -20,9 +20,10 @@ para ler arquivos, use Read, Grep e Glob — nunca `cat`, `head` ou `sed`.
 
 ## Referências — leia as que a mudança toca
 
-- `.claude/rules/<camada>.md` de cada camada alterada: `rotas`, `servicos`, `repositorios`,
-  `schemas`, `dominio`, `modelos-e-migracoes`, `autorizacao`, `extensoes-e-config`,
-  `mensageria`, `testes`, `infra`, `documentacao`.
+- `.claude/rules/<camada>.md` de cada camada alterada: `rotas`, `servicos`,
+  `servicos-telemetria`, `repositorios`, `schemas`, `dominio`, `contratos`,
+  `modelos-e-migracoes`, `autorizacao`, `extensoes-e-config`, `mensageria`, `testes`, `infra`,
+  `documentacao`.
 - `documentacao/01-arquitetura.md` (camadas e dependências), `documentacao/03-como-estender.md`
   (receitas e checklist) e `documentacao/02-decisoes.md`. Antes de apontar algo como estranho,
   confira se não é decisão registrada ali.

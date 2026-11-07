@@ -18,6 +18,7 @@ infraestrutura que não usa.
 
 import os
 
+import pika
 import pytest
 from flask import Flask
 from sqlalchemy import event
@@ -58,9 +59,11 @@ os.environ.setdefault("FLASK_SECRET_KEY", "chave-de-teste-sem-nenhum-valor-real-
 os.environ.setdefault("FLASK_JWT_SECRET_KEY", "chave-jwt-de-teste-sem-valor-real-0002")
 
 from app import create_app  # noqa: E402
+from domain.ports import PublishFailed  # noqa: E402
 from ext import mongo as ext_mongo  # noqa: E402
 from ext.database import db  # noqa: E402
 from ext.mongo import mongo  # noqa: E402
+from messaging import topology  # noqa: E402
 from messaging.connection import connection_parameters  # noqa: E402
 from messaging.management import ManagementApi  # noqa: E402
 
@@ -232,3 +235,59 @@ def amqp_vhost(amqp_url, amqp_management):
         vhost, parametros.credentials.username, configure=".*", write=".*", read=".*"
     )
     return vhost
+
+
+@pytest.fixture(scope="session")
+def amqp_topology(amqp_vhost, amqp_management):
+    """A topologia da telemetria aplicada no vhost de testes, pelo mesmo
+    ``topology.apply`` que o ``flask rabbitmq setup`` usa. Devolve o vhost."""
+    topology.apply(amqp_management, amqp_vhost)
+    return amqp_vhost
+
+
+@pytest.fixture
+def bronze_queue(amqp_url, amqp_topology):
+    """A fila do bronze no vhost de testes, vazia no começo do teste.
+
+    Devolve uma função que tira da fila e devolve as mensagens que estão nela,
+    como pares ``(propriedades, corpo)``.
+    """
+    parametros = connection_parameters(amqp_url, timeout=5, heartbeat=60, connection_name="pytest")
+    assert parametros.virtual_host == amqp_topology, "a fila lida não é a da topologia aplicada"
+    connection = pika.BlockingConnection(parametros)
+    channel = connection.channel()
+    channel.queue_purge(topology.QUEUE)
+
+    def _drain() -> list[tuple[pika.BasicProperties, bytes]]:
+        mensagens = []
+        while True:
+            method, properties, body = channel.basic_get(topology.QUEUE, auto_ack=True)
+            if method is None:
+                return mensagens
+            mensagens.append((properties, body))
+
+    yield _drain
+
+    channel.queue_purge(topology.QUEUE)
+    connection.close()
+
+
+class FilaEmMemoria:
+    """Dublê do ``TelemetryPublisher``: guarda os lotes publicados, ou falha como um
+    broker fora do ar quando ``falhar`` é verdadeiro."""
+
+    def __init__(self) -> None:
+        self.publicados: list = []
+        self.falhar = False
+
+    def publish(self, batch) -> None:
+        if self.falhar:
+            raise PublishFailed("broker fora do ar (dublê)")
+        self.publicados.append(batch)
+
+
+@pytest.fixture
+def fila_em_memoria():
+    """Um ``FilaEmMemoria`` novo. Para a aplicação usá-lo, veja a fixture ``fila``
+    de ``tests/test_telemetry.py``."""
+    return FilaEmMemoria()

@@ -20,6 +20,7 @@ from service.errors import (
     NotFoundError,
     PermissionDeniedError,
     ServiceError,
+    ServiceUnavailableError,
 )
 
 #: Exceção de domínio -> código HTTP. **Única** fonte de verdade do mapeamento:
@@ -32,6 +33,7 @@ ERROR_STATUS: dict[type[ServiceError], int] = {
     BusinessRuleError: 422,
     PermissionDeniedError: 403,
     AuthenticationError: 401,
+    ServiceUnavailableError: 503,
 }
 
 #: Serve como mensagem padrão (exceção levantada sem texto) e como descrição
@@ -48,11 +50,12 @@ STATUS_DESCRIPTION: dict[int, str] = {
 }
 
 
-def error_response(code: int, message: str):
+def error_response(code: int, message: str, headers: dict[str, str] | None = None):
     """Envelope de erro padrão — mesmo formato que o flask-smorest produz.
 
     Inclui o ``request_id`` quando disponível: é o que permite ligar a resposta
-    que o cliente recebeu à linha de log correspondente no servidor.
+    que o cliente recebeu à linha de log correspondente no servidor. ``headers``
+    vão na resposta (o ``Retry-After`` do 503).
     """
     payload: dict[str, Any] = {
         "code": code,
@@ -64,7 +67,9 @@ def error_response(code: int, message: str):
     if request_id:
         payload["request_id"] = request_id
 
-    return jsonify(payload), code
+    response = jsonify(payload)
+    response.headers.update(headers or {})
+    return response, code
 
 
 def error_responses(blp, *codes: int) -> Callable:

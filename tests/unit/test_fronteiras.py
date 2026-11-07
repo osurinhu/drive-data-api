@@ -4,11 +4,12 @@ Ler em vez de importar é de propósito: o teste não pode carregar justamente o
 que ele proíbe. O preço é não enxergar import dinâmico (``importlib``), que o
 projeto não usa.
 
-Hoje guarda as regras do domínio, escritas como listas de permitidos: o que não
-está nelas reprova, inclusive a biblioteca que ninguém lembrou de proibir. O
-``domain/`` tem duas partes: o ORM (``ORM``, abaixo) e o vocabulário, que é todo
-o resto. Arquivo novo de vocabulário cai sozinho na regra estrita; só escapa
-dela quem tem o nome na lista do ORM.
+Guarda as regras do domínio e a do pipeline de telemetria, escritas como listas
+de permitidos: o que não está nelas reprova, inclusive a biblioteca que ninguém
+lembrou de proibir. O ``domain/`` tem duas partes: o ORM (``ORM``, abaixo) e o
+vocabulário, que é todo o resto. Arquivo novo de vocabulário cai sozinho na regra
+estrita; só escapa dela quem tem o nome na lista do ORM. O mesmo vale para o
+arquivo novo de ``service/telemetry/``.
 """
 
 import ast
@@ -27,6 +28,10 @@ PERMITIDOS_NA_FOLHA = sys.stdlib_module_names | {"marshmallow"}
 
 #: O ORM importa o SQLAlchemy e o próprio domínio; nenhuma outra camada.
 PERMITIDOS_NO_ORM = sys.stdlib_module_names | {"sqlalchemy", "domain"}
+
+#: O pipeline de telemetria só fala com portas e folhas, e com o vocabulário comum
+#: do serviço. Nenhuma infraestrutura: os adaptadores chegam pelo construtor.
+PERMITIDOS_NO_PIPELINE = {"service.errors", "service.pagination"}
 
 
 def _nome_do_modulo(arquivo: Path) -> str:
@@ -72,9 +77,23 @@ def _proibidos_no_orm(importados: set[str]) -> list[str]:
     return sorted(nome for nome in importados if nome.split(".")[0] not in PERMITIDOS_NO_ORM)
 
 
+def _proibidos_no_pipeline(importados: set[str]) -> list[str]:
+    def permitido(nome: str) -> bool:
+        return (
+            nome.split(".")[0] in sys.stdlib_module_names
+            or _e_folha(nome)
+            or nome == "service"
+            or nome.startswith("service.telemetry")
+            or any(nome == p or nome.startswith(f"{p}.") for p in PERMITIDOS_NO_PIPELINE)
+        )
+
+    return sorted(nome for nome in importados if not permitido(nome))
+
+
 FOLHAS_DO_DOMINIO = sorted(
     arquivo for arquivo in (APP / "domain").rglob("*.py") if _nome_do_modulo(arquivo) not in ORM
 )
+PIPELINE = sorted((APP / "service" / "telemetry").rglob("*.py"))
 
 
 def test_o_dominio_tem_folhas_para_conferir():
@@ -82,9 +101,12 @@ def test_o_dominio_tem_folhas_para_conferir():
     assert {_nome_do_modulo(a) for a in FOLHAS_DO_DOMINIO} >= {
         "domain",
         "domain.authz",
+        "domain.contracts",
+        "domain.contracts.telemetry_batch",
         "domain.ports",
         "domain.vin",
     }
+    assert {_nome_do_modulo(a) for a in PIPELINE} >= {"service.telemetry.ingest_service"}
 
 
 @pytest.mark.parametrize("arquivo", FOLHAS_DO_DOMINIO, ids=_nome_do_modulo)
@@ -96,10 +118,12 @@ def test_folha_do_dominio_so_importa_stdlib_marshmallow_e_outras_folhas(arquivo)
     assert _proibidos_na_folha(_importados(arquivo)) == []
 
 
-def test_o_init_do_dominio_nao_importa_nada():
-    """``import domain.ports`` executa este ``__init__``: um import aqui seria
-    carregado por todo consumidor das folhas."""
-    assert _importados(APP / "domain" / "__init__.py") == set()
+@pytest.mark.parametrize("pacote", ["domain", "domain/contracts", "service/telemetry"])
+def test_o_init_dos_pacotes_de_vocabulario_e_do_pipeline_nao_importa_nada(pacote):
+    """``import domain.ports`` executa o ``__init__`` de ``domain``: um import ali
+    seria carregado por todo consumidor das folhas. No ``service/telemetry``, um
+    import juntaria os dois lados do pipeline num processo só."""
+    assert _importados(APP / pacote / "__init__.py") == set()
 
 
 @pytest.mark.parametrize("modulo", sorted(ORM))
@@ -132,6 +156,37 @@ def test_a_regra_da_folha(importados, proibidos):
     """A regra, provada sobre exemplos: sem isto, um teste que nunca reprova pareceria
     um domínio bem comportado."""
     assert _proibidos_na_folha(importados) == proibidos
+
+
+@pytest.mark.parametrize("arquivo", PIPELINE, ids=_nome_do_modulo)
+def test_o_pipeline_so_importa_portas_folhas_e_o_vocabulario_do_servico(arquivo):
+    """Falhou? Um módulo de ``service/telemetry/`` passou a importar infraestrutura
+    (``flask``, ``pika``, ``pymongo``, ``sqlalchemy``), um adaptador ou o ORM. A
+    regra deixaria de se testar com dublês, e o consumer, que importa o seu lado
+    do pipeline, carregaria o que não usa. O adaptador chega pelo construtor."""
+    assert _proibidos_no_pipeline(_importados(arquivo)) == []
+
+
+@pytest.mark.parametrize(
+    ("importados", "proibidos"),
+    [
+        pytest.param(
+            {"uuid", "domain.ports", "service.errors", "service.telemetry.ingest_rules"},
+            [],
+            id="o permitido",
+        ),
+        pytest.param({"pika"}, ["pika"], id="infraestrutura"),
+        pytest.param({"domain.models"}, ["domain.models"], id="o ORM"),
+        pytest.param(
+            {"repository.sql.vehicle_repository"},
+            ["repository.sql.vehicle_repository"],
+            id="um adaptador",
+        ),
+        pytest.param({"service.base_service"}, ["service.base_service"], id="o CRUD da base"),
+    ],
+)
+def test_a_regra_do_pipeline(importados, proibidos):
+    assert _proibidos_no_pipeline(importados) == proibidos
 
 
 @pytest.mark.parametrize(
