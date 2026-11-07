@@ -4,8 +4,9 @@ O que estes testes fixam, e que nenhum teste de CRUD pegaria:
 
 * a permissão decide a **operação** (403) e o ownership decide o **registro**
   (404) — duas respostas diferentes, de propósito;
-* cada escrita declara a sua permissão: o piso da classe é de leitura, e o
-  `test_contracts.py` o aceita como declaração — só o 403 daqui pega a falta;
+* cada escrita declara a sua permissão: o piso da classe é de leitura. O
+  `test_contracts.py` reprova a escrita sem decorator; o 403 daqui prova que
+  a permissão declarada é a de escrita;
 * escopo de leitura e escopo de escrita são permissões separadas, então existe
   um papel que vê tudo e altera só o que é dele;
 * o papel é lido do banco, não do token.
@@ -30,6 +31,13 @@ def test_os_papeis_sao_cumulativos():
     assert permissions_of(Role.LEITOR) < permissions_of(Role.USUARIO)
     assert permissions_of(Role.USUARIO) < permissions_of(Role.GERENTE)
     assert permissions_of(Role.GERENTE) < permissions_of(Role.ADMIN)
+
+
+def test_a_silver_e_um_ramo_a_parte():
+    """A conta da silver só lê o bronze: não tem permissão nenhuma da hierarquia,
+    e nenhum papel dela lê o bronze, nem o admin (que contém todos os outros)."""
+    assert permissions_of(Role.SILVER)
+    assert permissions_of(Role.SILVER).isdisjoint(permissions_of(Role.ADMIN))
 
 
 def test_has_permission_exige_todas_as_informadas():
@@ -69,9 +77,9 @@ def test_o_403_vem_antes_da_validacao_do_corpo(client, login):
 
 def test_leitor_nao_altera_nem_exclui_o_proprio_item(client, login, set_role):
     """O piso da classe é de leitura: cada escrita depende do seu próprio
-    `@permission_required`, e o `test_contracts.py` não percebe se ele sumir
-    (aceita o piso como declaração). Dona do item, `ana` só pode levar o 403 da
-    permissão — nunca o 404 do ownership."""
+    `@permission_required`, e só este teste diz se ele exige a permissão certa
+    (o `test_contracts.py` confere que existe). Dona do item, `ana` só pode levar
+    o 403 da permissão — nunca o 404 do ownership."""
     ana, headers = login(name="ana")
     item_id = _criar(client, headers, "da ana")
     set_role(ana["name"], Role.LEITOR)

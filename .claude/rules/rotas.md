@@ -18,8 +18,8 @@ Molde: `app/blueprint/restapi/v1/item.py`. Receitas: 03-como-estender §1.8, §2
   fica fechado para quem não lê — mas o piso é de leitura.
 - **Cada** método de escrita leva o seu `@permission_required(Permission.X_ESCREVER)`, **acima**
   dos decorators do smorest (quem não pode leva 403 antes de descobrir o corpo num 422). Esquecido,
-  a escrita abre para quem só lê, e o `test_contracts.py` não percebe (aceita o piso da classe):
-  só o teste de 403 com `Role.LEITOR` daquela operação pega.
+  a escrita abriria para quem só lê: o `test_contracts.py` reprova escrita não pública sem
+  decorator no próprio método, e o teste de 403 com `Role.LEITOR` prova que a permissão é a certa.
 - Qualquer autenticado: `decorators = [authenticated]` (de `ext.auth`). Rota pública:
   `@blp.doc(security=PUBLIC)` (de `ext.api`) **e** a tupla em `ROTAS_PUBLICAS`
   (`tests/test_contracts.py`); faltando um dos dois, o CI reprova.

@@ -169,3 +169,26 @@ que muda uma regra de projeto e por isso é decisão do usuário:
     As sugestões também entraram: a redação de "não importa extensão" e de "quatro processos",
     o `HEALTH_CRITICAL = []` dos perfis sem rota, preparo, ação e verificação separados, o
     timeout de 20 s no CI e o aviso de não expor o `/health/` na internet.
+- **2026-11-07 — passo 1.2 do pipeline (papel `silver` e `Vehicle`).**
+  - **Autorização:** as permissões do plano entraram todas de uma vez (`veiculo:*`,
+    `telemetria:enviar`, `bronze:*`), porque o teste "a `silver` fica fora do `admin`" precisa
+    das do bronze. A `silver` é um ramo à parte, disjunto do `admin`. A migração 0002 troca o
+    CHECK, e o downgrade falha de propósito se ainda houver conta `silver`.
+  - **`Vehicle`:** o VIN é único entre os ativos de qualquer dono (`uq_vehicles_vin_active`,
+    migração 0003). O formato é ISO 3779 sem o dígito verificador (`vin.py`), e o VIN é imutável:
+    o PATCH só aceita o apelido, e o serviço recusa a troca.
+  - **Desvio do plano:** o `ports.py` nasceu aqui, um passo antes, porque o
+    `VehicleRepository.authorized_vins` devolve o `AuthorizedVehicle` da porta.
+  - **Regras e skills:** o teste de 403 de escrita usa "um papel sem a permissão" (a `silver`
+    no `Vehicle`, que o `leitor` nem lê). Isso ficou registrado em `rules/testes.md`, no
+    `/nova-entidade` e em 03 §1.10. O smoke cria também o `smoke-silver` e ganhou oito linhas de
+    veículo.
+  - **Revisão do `revisor-arquitetura`:** sem bloqueantes. Um achado importante, corrigido: a
+    `silver` não tem `veiculo:ler`, então o 403 dela sai do piso da classe, e um
+    `@permission_required` de escrita apagado passaria na suíte. O `test_contracts.py` ganhou
+    `test_toda_escrita_protegida_declara_a_propria_permissao` (escrita não pública precisa de
+    decorator no próprio método; conferido apagando o do PATCH de veículo). Os textos que diziam
+    "só o teste de 403 pega" foram corrigidos (03 §1.10 e checklist, `rules/rotas.md`,
+    `rules/testes.md`, `/nova-entidade` e `test_authz.py`).
+  - **Ambiente:** o `Result.tuples()` do SQLAlchemy 2.1 está obsoleto (o `Row` já desempacota
+    com tipo); com o `select` do SQLAlchemy em vez do `db.select`, o mypy vê o tipo das colunas.

@@ -15,7 +15,9 @@ usem o mesmo vocabulário sem ciclo. Receitas: 03-como-estender §1.7 e §10; de
   escrita separados permitem o papel que vê tudo e altera só o próprio.
 - Toda permissão é concedida a pelo menos um papel em `ROLE_PERMISSIONS`; senão a rota fica
   inacessível para todos, e `test_contracts.py` reprova. A hierarquia é inclusão de conjuntos
-  (`_LEITOR ⊂ _USUARIO ⊂ _GERENTE ⊂ _ADMIN`); papel novo parte de um existente.
+  (`_LEITOR ⊂ _USUARIO ⊂ _GERENTE ⊂ _ADMIN`); papel novo parte de um existente. A exceção é a
+  conta de sistema `_SILVER`, ramo à parte e disjunto do `_ADMIN` (só lê o bronze; ninguém da
+  hierarquia lê). Molde de migração de papel: `0002_papel_silver.py`.
 - Papel novo, em quatro passos: membro em `Role`; entrada em `ROLE_PERMISSIONS`; **migração que
   troca o CHECK `ck_users_role`** (o autogenerate não detecta, e os testes passam porque usam
   `create_all`); `upgrade head` e `check`. O `--role` da CLI sai da enumeração sozinho.

@@ -67,7 +67,8 @@ Crie o primeiro usuário e experimente:
 docker compose exec api flask create-user --name admin --password sua-senha-aqui --role admin
 ```
 
-Os papéis são `leitor` (só leitura), `usuario`, `gerente` e `admin`; o padrão é `usuario`.
+Os papéis são `leitor` (só leitura), `usuario`, `gerente`, `admin` e `silver` (a conta de
+sistema da camada silver: só lê o bronze, e só a CLI a cria); o padrão é `usuario`.
 Para trocar o papel de alguém depois: `flask set-role --name admin --role gerente` (vale na
 requisição seguinte, mesmo com o token já emitido).
 
@@ -116,6 +117,8 @@ app/
   http_errors.py          envelope de erro + mapa exceção → HTTP
   request_context.py      id da requisição
   authz.py                papéis, permissões e o mapa entre eles
+  vin.py                  formato e forma canônica do VIN
+  ports.py                portas do pipeline de telemetria (interfaces e os tipos que trocam)
   instrumentation/        observação usada por mais de uma extensão (sondas do health)
   messaging/              RabbitMQ: conexão, sonda e API de gerenciamento
   ext/                    infraestrutura — cada módulo expõe init_app(app)

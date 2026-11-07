@@ -41,7 +41,8 @@ o próximo `docker compose up -d` recria o `api` com o código que estava no dis
 
 ## Quando a matriz precisa mudar
 
-A matriz cobre `Item`, que é o molde. Entidade nova com rota própria ganha as linhas dela,
+A matriz cobre `Item`, que é o molde, e `Vehicle` (VIN único entre todos os donos, 403 da
+`silver`, escopo do admin). Entidade nova com rota própria ganha as linhas dela,
 copiando as de item: criação, 403 do `leitor`, 404 do alheio, escopo do gerente e do admin.
 Mantenha a matriz curta. O pytest cobre os detalhes; o smoke prova que a aplicação de verdade
 responde. Mudou uma regra de status (uma rota passou a ser pública, por exemplo)? Ajuste a linha

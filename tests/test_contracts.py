@@ -147,3 +147,27 @@ def test_toda_rota_protegida_declara_a_permissao_que_exige(app):
             sem_declaracao.append(f"{verbo} {regra.rule}")
 
     assert not sem_declaracao, sorted(sem_declaracao)
+
+
+VERBOS_DE_ESCRITA = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def test_toda_escrita_protegida_declara_a_propria_permissao(app):
+    """Falhou? Um método de escrita ficou só com o piso da classe, que é de
+    leitura: quem só lê passaria a escrever. O teste acima aceita o piso como
+    declaração, e o 403 de um papel sem leitura nenhuma (como a `silver` no
+    veículo) sai do piso, então nenhum dos dois perceberia. Rota de escrita que
+    qualquer autenticado pode chamar declara `@authenticated` no método."""
+    sem_declaracao = []
+    for regra in app.url_map.iter_rules():
+        classe = getattr(app.view_functions[regra.endpoint], "view_class", None)
+        if classe is None:
+            continue
+        for verbo in sorted((regra.methods or set()) & VERBOS_DE_ESCRITA):
+            metodo = getattr(classe, verbo.lower(), None)
+            if metodo is None or (verbo, regra.rule) in ROTAS_PUBLICAS:
+                continue
+            if not hasattr(metodo, "__permissoes__"):
+                sem_declaracao.append(f"{verbo} {regra.rule}")
+
+    assert not sem_declaracao, sorted(sem_declaracao)

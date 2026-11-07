@@ -30,7 +30,7 @@ Uso (a partir da raiz do repositório):
 
 Sobe o código atual num container avulso do `api`, com banco descartável, e
 confere por HTTP: health (com o perfil api: banco e RabbitMQ), OpenAPI, login,
-CRUD de item, a matriz 401/403/404/409/422 e o X-Request-ID no header, no
+CRUD de item e de veículo, a matriz 401/403/404/409/422 e o X-Request-ID no header, no
 envelope de erro e no log de acesso.
 
 Saída: 0 = tudo OK; 1 = alguma verificação falhou (ou a aplicação não subiu);
@@ -127,7 +127,7 @@ echo ">> no ar em $(($(date +%s) - inicio)) s, em $base"
 
 senha="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
 if ! docker exec -e SMOKE_SENHA="$senha" "$container" sh -c '
-  for papel in leitor usuario gerente admin; do
+  for papel in leitor usuario gerente admin silver; do
     flask create-user --name "smoke-$papel" --password "$SMOKE_SENHA" --role "$papel" || exit 1
   done' >"$tmp/usuarios.log" 2>&1; then
   echo "FALHOU  flask create-user:"
@@ -135,7 +135,7 @@ if ! docker exec -e SMOKE_SENHA="$senha" "$container" sh -c '
   echo "RESULTADO: FALHOU — flask create-user"
   exit 1
 fi
-echo ">> flask create-user: smoke-leitor, smoke-usuario, smoke-gerente e smoke-admin"
+echo ">> flask create-user: smoke-leitor, smoke-usuario, smoke-gerente, smoke-admin e smoke-silver"
 
 # --- Matriz ---------------------------------------------------------------------
 
@@ -203,7 +203,7 @@ confere 200 "spec OpenAPI, público" GET /openapi.json
 confere 401 "sem token" GET /item/
 confere 401 "senha errada" POST /auth/token "" '{"name":"smoke-usuario","password":"errada"}'
 
-for papel in leitor usuario gerente admin; do
+for papel in leitor usuario gerente admin silver; do
   confere 200 "login de $papel" POST /auth/token "" \
     "{\"name\":\"smoke-$papel\",\"password\":\"$senha\"}"
   printf -v "token_$papel" '%s' "$(campo access_token)"
@@ -225,6 +225,20 @@ confere 404 "gerente não altera o alheio" PATCH "/item/$item" "$token_gerente" 
 confere 200 "admin altera o alheio" PATCH "/item/$item" "$token_admin" '{"name":"smoke 2"}'
 confere 200 "dono exclui (lógica)" DELETE "/item/$item" "$token_usuario"
 confere 404 "excluído some" GET "/item/$item" "$token_usuario"
+
+# Veículo: o VIN é único entre todos os donos (e vale a forma canônica), a silver
+# não mexe em veículo e só o admin tem escopo sobre o alheio.
+vin="93YBSR7RHEJ298116"
+confere 201 "usuario cadastra veículo" POST /vehicle/ "$token_usuario" "{\"vin\":\"$vin\"}"
+veiculo="$(campo id)"
+veiculo="${veiculo:-0}"
+confere 409 "VIN de outro gestor" POST /vehicle/ "$token_gerente" '{"vin":"93ybsr7rhej298116"}'
+confere 422 "VIN inválido" POST /vehicle/ "$token_usuario" '{"vin":"93YBSR7RHEJ29811O"}'
+confere 403 "silver não cadastra" POST /vehicle/ "$token_silver" '{"vin":"9BWZZZ377VT004251"}'
+confere 404 "outro não vê o veículo" GET "/vehicle/$veiculo" "$token_gerente"
+confere 200 "admin altera o veículo" PATCH "/vehicle/$veiculo" "$token_admin" '{"nickname":"smoke"}'
+confere 200 "gestor exclui veículo" DELETE "/vehicle/$veiculo" "$token_usuario"
+confere 404 "veículo excluído some" GET "/vehicle/$veiculo" "$token_usuario"
 
 # A última resposta é um 404: o id precisa voltar no header e no envelope de erro.
 total=$((total + 1))

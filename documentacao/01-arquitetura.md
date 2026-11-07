@@ -50,7 +50,7 @@ comum aos processos HTTP.
 | Perfil | Quem roda | Dependências | Rotas |
 |---|---|---|---|
 | `[default]` (sem `FLASK_PROCESS`) | desenvolvimento local e a suíte de testes | todas: é a união dos perfis | todas |
-| `[api]` | serviço `api` do compose: login e as rotas de negócio; é ele que publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item` |
+| `[api]` | serviço `api` do compose: login e as rotas de negócio; é ele que publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item`, `vehicle` |
 | `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que lê o bronze (por enquanto, só login) | Postgres e Mongo | `health`, `auth` |
 | `[consumer]` | o consumer da fila, que grava no bronze (ainda sem serviço no compose) | Mongo e RabbitMQ (sem Postgres e sem JWT) | nenhuma |
 | `[setup]` | o job `setup`: migra e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação | nenhuma |
@@ -89,6 +89,8 @@ E a infraestrutura, fora do caminho da requisição:
 | `app/http_errors.py` | Envelope de erro e o mapa exceção → status HTTP. Fica fora de `ext/` porque é usado por duas extensões diferentes; se morasse em uma delas, a outra passaria a depender dela. |
 | `app/request_context.py` | Id da requisição. Módulo folha: não importa nada do projeto, então pode ser usado por qualquer camada sem criar ciclo. |
 | `app/authz.py` | Papéis, permissões e o mapa entre eles. Módulo folha, pelo mesmo motivo: o modelo grava o papel, a extensão decide com ele, a rota declara a permissão que exige e o schema publica as do usuário. |
+| `app/vin.py` | Vocabulário do VIN: a regra do formato (ISO 3779, sem o dígito verificador) e a forma canônica. Módulo folha: o schema recusa o formato, o serviço grava a forma canônica e a consulta de posse a usa. |
+| `app/ports.py` | Portas do pipeline de telemetria: interfaces (`Protocol`) e os tipos que elas trocam. Módulo folha: os serviços do pipeline dependem delas e os adaptadores as implementam sem herdar (o `VehicleRepository.authorized_vins` implementa `VehicleAuthorization`). |
 | `app/instrumentation/` | Peças de observação usadas por mais de uma extensão. Hoje é o registro das sondas do health (`probes.py`): cada extensão que conecta um serviço registra a sua sonda, e a rota do health executa as registradas. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
 | `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika) e o cliente da API de gerenciamento (`management.py`, só stdlib). Recebe URL e prazos de quem chama e não importa `ext`, `repository` nem `blueprint`. |
 
@@ -99,7 +101,7 @@ E a infraestrutura, fora do caminho da requisição:
 ```
 rota      →  serviço, schema, ext, http_errors, instrumentation (só o health)
 serviço   →  repositório, domínio
-repositório → domínio, ext.database
+repositório → domínio, ext.database, ports
 domínio   →  (nada do projeto)
 schema    →  (nada do projeto)
 instrumentation, messaging  →  (nada do projeto)
@@ -124,7 +126,7 @@ Duas regras que valem a pena memorizar:
 2. **A seta nunca aponta para cima.** Serviço não importa rota, repositório não importa
    serviço. Se você sentir essa necessidade, a lógica está na camada errada.
 
-Os **módulos folha** da raiz de `app/` (`authz.py`, `request_context.py`) são a exceção
+Os **módulos folha** da raiz de `app/` (`authz.py`, `request_context.py`, `vin.py`, `ports.py`) são a exceção
 prevista pela regra 1: como não importam nada do projeto, qualquer camada pode importá-los
 sem criar ciclo nem acoplar duas camadas uma à outra. É o que permite rota, serviço,
 modelo e schema falarem do mesmo vocabulário de permissões.
@@ -157,19 +159,25 @@ junto do mapa entre eles:
 ```python
 #: Cada papel parte do anterior, para que a hierarquia esteja escrita no código.
 _LEITOR  = frozenset({ITEM_LER})
-_USUARIO = _LEITOR  | {ITEM_ESCREVER}
+_USUARIO = _LEITOR  | {ITEM_ESCREVER, VEICULO_LER, VEICULO_ESCREVER, TELEMETRIA_ENVIAR}
 _GERENTE = _USUARIO | {ITEM_LER_DE_TODOS}
-_ADMIN   = _GERENTE | {ITEM_ESCREVER_DE_TODOS}
+_ADMIN   = _GERENTE | {ITEM_ESCREVER_DE_TODOS, VEICULO_LER_DE_TODOS, VEICULO_ESCREVER_DE_TODOS}
+
+#: Ramo à parte: a conta de sistema da camada silver só lê o bronze.
+_SILVER  = frozenset({BRONZE_LER, BRONZE_LER_DE_TODOS})
 
 ROLE_PERMISSIONS = {
     Role.LEITOR: _LEITOR,
     Role.USUARIO: _USUARIO,
     Role.GERENTE: _GERENTE,
     Role.ADMIN: _ADMIN,
+    Role.SILVER: _SILVER,
 }
 ```
 
-Os quatro papéis que acompanham a base vão do somente-leitura ao administrador. O
+São cinco papéis. Os quatro da hierarquia vão do somente-leitura ao administrador; o
+quinto, `silver`, fica fora dela: não tem nenhuma permissão dos outros, e nenhum deles,
+nem o `admin`, lê o bronze. O
 `leitor` existe por um motivo prático: sem um papel sem permissão de escrita, a resposta
 **403** só seria alcançável remendando o mapa dentro do teste, e a configuração que
 acompanha a base não demonstraria o próprio caminho de negação.
@@ -187,7 +195,7 @@ class ItemView(MethodView):
 Três consequências que valem o espaço:
 
 * **A hierarquia é inclusão de conjuntos, não um número.** `ADMIN` contém `GERENTE`, que
-  contém `USUARIO`, que contém `LEITOR`. Nenhum peso arbitrário para justificar, e "o
+  contém `USUARIO`, que contém `LEITOR`; o `SILVER` é disjunto de todos. Nenhum peso arbitrário para justificar, e "o
   gerente vê tudo mas altera só o que é dele" é expressável — o que um nível ordenado não
   permitiria.
 * **O papel mora só no banco.** Não há claim equivalente no token: a autorização lê
@@ -276,6 +284,8 @@ app/
   http_errors.py             envelope de erro + mapa exceção → HTTP
   request_context.py         id da requisição (módulo folha)
   authz.py                   papéis, permissões e o mapa entre eles (módulo folha)
+  vin.py                     formato e forma canônica do VIN (módulo folha)
+  ports.py                   portas do pipeline: Protocol e os tipos que trocam (módulo folha)
   instrumentation/
     probes.py                registro das sondas do health
   messaging/                 RabbitMQ
@@ -295,12 +305,13 @@ app/
     commands.py              comandos `flask ...`
   domain/
     base.py                  BaseModel (campos de controle, convenção de nomes)
-    models.py                User, Item
+    models.py                User, Item, Vehicle
   repository/                uma subpasta por tecnologia
     sql/                     SQLAlchemy: a única parte que monta consulta SQL
       base_repository.py     CRUD genérico
       user_repository.py     uma linha: amarra o modelo
       item_repository.py
+      vehicle_repository.py  + authorized_vins: a posse para o envio (uma consulta por lote)
   service/
     base_service.py          CRUD + ownership + ganchos
     errors.py                exceções de domínio
@@ -308,16 +319,19 @@ app/
     auth_service.py          verificação de credenciais
     user_service.py
     item_service.py
+    vehicle_service.py       VIN na forma canônica e imutável
   schemas/
     pagination_schema.py     parâmetros e envelope de paginação
     error_schema.py          envelope de erro (documentação)
     health_schema.py
     auth_schema.py
     item_schema.py
+    vehicle_schema.py
   blueprint/restapi/v1/
     health.py                prontidão por dependência e vida (/health/live), públicas
     auth.py                  token e identidade
     item.py                  CRUD da entidade de exemplo
+    vehicle.py               cadastro de veículos (quem cadastra é o gestor)
 
 migrations/                  Alembic
 tests/                       pytest; a raiz usa Postgres e HTTP, unit/ não usa nada, mongo/ e

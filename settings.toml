@@ -119,6 +119,7 @@ API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
+    "blueprint.restapi.v1.vehicle",
 ]
 
 
@@ -147,6 +148,7 @@ API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
+    "blueprint.restapi.v1.vehicle",
 ]
 # O RabbitMQ fora não tira o processo do balanceador: login e cadastro seguem
 # funcionando, e só o envio de lote responde 503.

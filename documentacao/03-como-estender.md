@@ -269,8 +269,11 @@ exigir permissão que algum papel não tem, cubra também o **403** em **cada** 
 escrita, com o `leitor`, o papel somente-leitura que a base traz. Na criação, entre com
 `login(role=Role.LEITOR)`; nas escritas sobre um registro que já existe (PATCH, DELETE), crie
 como `usuario` e rebaixe com `set_role(nome, Role.LEITOR)` (molde em `tests/test_authz.py`).
-É o único teste que pega um `@permission_required` de escrita esquecido, porque o piso de
-leitura da classe já satisfaz o `tests/test_contracts.py`.
+O `@permission_required` de escrita esquecido reprova em
+`test_toda_escrita_protegida_declara_a_propria_permissao` (`tests/test_contracts.py`), que só
+confere que o método declara *uma* permissão; o 403 de quem lê e não escreve prova que é a
+certa. Recurso que o `leitor` nem lê (o `Vehicle`) usa outro papel sem a escrita, a `silver`,
+mas aí o 403 sai do piso da classe e só o teste de contrato protege a escrita.
 
 ---
 
@@ -623,13 +626,14 @@ banco.
 
 1. O membro em `Role` (`app/authz.py`).
 2. A entrada em `ROLE_PERMISSIONS`, de preferência a partir de um papel existente
-   (`_REVISOR = _USUARIO | {Permission.ITEM_LER_DE_TODOS}`).
+   (`_REVISOR = _USUARIO | {Permission.ITEM_LER_DE_TODOS}`). Papel que não estende nenhum
+   (uma conta de sistema, como a `silver`) é um ramo à parte, com o próprio `frozenset`.
 3. **A migração que troca a restrição `CHECK`**, porque o banco recusa um valor que não
    está nela:
 
    ```python
-   # migrations/versions/000X_papel_revisor.py
-   PAPEIS = ("leitor", "usuario", "revisor", "gerente", "admin")
+   # migrations/versions/000X_papel_revisor.py  (molde real: 0002_papel_silver.py)
+   PAPEIS = ("leitor", "usuario", "revisor", "gerente", "admin", "silver")
 
    def upgrade() -> None:
        valores = ", ".join(f"'{p}'" for p in PAPEIS)
@@ -671,8 +675,8 @@ E confira:
       aberto, então abrir uma rota sem fazer as duas coisas reprova no CI.
 - [ ] Rota nova declara a **permissão** que exige, e não só o token. (Esquecer reprova em
       `tests/test_contracts.py`, mas é melhor descobrir antes.) Cada método de escrita
-      declara a sua: o piso de leitura da classe satisfaz o contrato, então só o teste de
-      403 pega essa falta.
+      declara a sua no próprio método: o piso de leitura da classe não conta para a escrita,
+      e o contrato reprova sem ela. O teste de 403 prova que a permissão é a certa.
 - [ ] Módulo novo de `EXTENSIONS` ou de `API_V1_ROUTES` está no `[default]` **e** no perfil de
       cada processo que o usa. Esquecer uma das duas reprova em `tests/unit/test_composicao.py`;
       pôr no perfil errado, não.

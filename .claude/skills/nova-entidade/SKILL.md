@@ -61,7 +61,8 @@ fixa o padrão de permissões e escopo para esse caso — proponha ao usuário (
    §1.9). O `tests/unit/test_composicao.py` reprova se ela estiver numa lista só.
 10. **Testes** (`tests/test_product.py`, a partir de `test_item.py`). Mínimo: criação; listagem
     paginada; 409 de duplicado; 422 de entrada inválida; exclusão lógica sumindo das consultas;
-    404 para recurso de outro dono; 403 com `Role.LEITOR` em **cada** escrita (POST com
+    404 para recurso de outro dono; 403 com `Role.LEITOR` em **cada** escrita (ou `Role.SILVER`,
+    se o `leitor` nem lê o recurso, como em `test_vehicle.py`) (POST com
     `login(role=Role.LEITOR)`; PATCH e DELETE criando como `usuario` e rebaixando com `set_role`);
     e, com os escopos padrão, gerente lê mas não altera o de outro dono (molde em `test_authz.py`).
 

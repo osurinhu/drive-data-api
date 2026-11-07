@@ -10,9 +10,11 @@ from flask import Flask
 
 from repository.sql.item_repository import ItemRepository
 from repository.sql.user_repository import UserRepository
+from repository.sql.vehicle_repository import VehicleRepository
 from service.auth_service import AuthService
 from service.item_service import ItemService
 from service.user_service import UserService
+from service.vehicle_service import VehicleService
 
 
 class Container(containers.DeclarativeContainer):
@@ -23,11 +25,13 @@ class Container(containers.DeclarativeContainer):
     # --- Repositories ---------------------------------------------------------
     user_repository = providers.Factory(UserRepository)
     item_repository = providers.Factory(ItemRepository)
+    vehicle_repository = providers.Factory(VehicleRepository)
 
     # --- Services -------------------------------------------------------------
     user_service = providers.Factory(UserService, repository=user_repository)
     auth_service = providers.Factory(AuthService, repository=user_repository)
     item_service = providers.Factory(ItemService, repository=item_repository)
+    vehicle_service = providers.Factory(VehicleService, repository=vehicle_repository)
 
 
 def init_app(app: Flask) -> None:

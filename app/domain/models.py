@@ -42,6 +42,7 @@ class User(BaseModel):
     )
 
     items: Mapped[list["Item"]] = relationship(back_populates="owner")
+    vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="owner")
 
     def __repr__(self) -> str:
         return f"<User id={self.id} name={self.name!r} role={self.role.value!r}>"
@@ -70,3 +71,30 @@ class Item(BaseModel):
 
     def __repr__(self) -> str:
         return f"<Item id={self.id} name={self.name!r} owner_id={self.owner_id}>"
+
+
+class Vehicle(BaseModel):
+    """Veículo cadastrado. O dono (``owner``) é o gestor: quem o cadastrou."""
+
+    __tablename__ = "vehicles"
+    __table_args__ = (
+        # Único entre os veículos ATIVOS, de qualquer dono: o VIN identifica o
+        # carro, e é por ele que se descobre quem pode enviar dados dele. Dois
+        # cadastros ativos do mesmo VIN seriam dois gestores para o mesmo carro.
+        Index(
+            "uq_vehicles_vin_active",
+            "vin",
+            unique=True,
+            postgresql_where=text("deleted = false"),
+        ),
+    )
+
+    # Sempre na forma canônica (`vin.normalize_vin`), gravada pelo serviço.
+    vin: Mapped[str] = mapped_column(String(17))
+    nickname: Mapped[str | None] = mapped_column(String(50), default=None)
+
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    owner: Mapped["User"] = relationship(back_populates="vehicles")
+
+    def __repr__(self) -> str:
+        return f"<Vehicle id={self.id} vin={self.vin!r} owner_id={self.owner_id}>"

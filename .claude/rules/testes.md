@@ -34,8 +34,10 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
   inválida, exclusão lógica sumindo das consultas, **404 para recurso de outro dono** e **403 com
   `Role.LEITOR` em cada operação de escrita** — na criação, `login(role=Role.LEITOR)`; nas escritas
   sobre registro existente (PATCH, DELETE, ações como o `arquivar` da §2), crie como `usuario`,
-  rebaixe com `set_role(nome, Role.LEITOR)` e espere 403. É o único teste que pega um
-  `@permission_required` de escrita esquecido.
+  rebaixe com `set_role(nome, Role.LEITOR)` e espere 403. Ele prova que a permissão da escrita é a
+  certa; a falta do decorator o `test_contracts.py` pega. Recurso que o `leitor` nem lê (o
+  `Vehicle`) usa a `Role.SILVER`, cujo 403 sai do piso da classe: aí a escrita fica só com o
+  contrato.
 - `test_contracts.py` guarda contratos que nenhum teste funcional pegaria. Nunca o afrouxe para
   passar: corrija a causa. Só altere `ROTAS_PUBLICAS` ao abrir uma rota de propósito.
 - `test_write_cost.py` fixa contagens medidas; mudar um número exige medir (`/medir-consultas`) e

@@ -129,6 +129,30 @@ Validar apenas na aplicação deixa brecha em condição de corrida e em escrita
 caminho.
 **Descartado:** o modelo dos projetos de origem, que validava só na camada de serviço.
 
+### Um VIN, um cadastro ativo, de qualquer dono
+`uq_vehicles_vin_active` é único sobre `vin` entre os veículos ativos, sem o dono na chave
+(o nome do item é único por dono).
+**Por quê:** o VIN identifica o carro, e é por ele que a posse é consultada no envio
+(`VehicleRepository.authorized_vins`). Dois cadastros ativos do mesmo VIN seriam dois
+gestores para o mesmo carro, os dois enviando dados dele.
+**Descartado:** a unicidade por dono, no molde do `Item`.
+**Custo aceito:** quem cadastra primeiro bloqueia o VIN (409), mesmo que o carro não seja
+dele; a disputa é resolvida pelo `admin`, que tem os escopos de veículo de todos. O 409
+revela que o VIN está cadastrado, o que não é segredo: o VIN vem gravado no próprio carro.
+
+### VIN no formato ISO 3779, sem o dígito verificador
+`vin.py` aceita 17 letras e dígitos sem I, O e Q, em qualquer caixa e com espaços nas
+pontas, e grava a forma canônica (maiúsculas, sem os espaços). O schema recusa o formato
+com erro por campo; o serviço normaliza e recusa de novo, para quem não passa por schema,
+no mesmo arranjo do nome vazio (acima). O VIN não muda depois do cadastro: o PATCH só
+aceita o apelido, e o serviço recusa a troca.
+**Por quê sem o dígito:** ele só é obrigatório na América do Norte. O VIN do payload de
+exemplo, `93YBSR7RHEJ298116` (Renault do Brasil), seria recusado.
+**Atenção:** o texto precisa ser ASCII antes do `upper()`, porque `"ſ".upper()` é `"S"` e
+`"ß".upper()` é `"SS"`; `tests/unit/test_vin.py` fixa os dois casos.
+**Descartado:** conferir o dígito verificador; aceitar qualquer texto até 17 caracteres
+(a posse seria consultada por uma chave sem forma definida).
+
 ### Alembic, não `create_all()`
 Migração versionada é o único caminho de evolução de schema em base com dados.
 **Descartado:** `db.create_all()` (um dos projetos de origem) e SQL mantido à mão (o
@@ -197,7 +221,7 @@ Uma permissão é uma capacidade (`item:escrever`); um papel é um pacote de per
 usuário guarda o papel. A rota declara a **permissão** que exige, nunca o papel, e o mapa
 `ROLE_PERMISSIONS` (em `app/authz.py`) é a única fonte de verdade.
 **Por quê:** separa *quem pode* de *quem é*. Mudar a regra passa a ser reescrever um mapa
-de quatro linhas, e não caçar verificações espalhadas pelas rotas. A hierarquia entre papéis
+de cinco linhas, e não caçar verificações espalhadas pelas rotas. A hierarquia entre papéis
 fica sendo inclusão de conjuntos, o que a torna verificável em vez de convencionada.
 **Os quatro que acompanham a base:** `leitor` (só leitura), `usuario`, `gerente` e
 `admin`. O `leitor` não é enfeite: sem um papel sem permissão de escrita, o **403** só
@@ -215,6 +239,18 @@ significado, ou se fura o modelo.
 em tempo de execução. São três tabelas, três modelos, três repositórios, CRUD, cache e
 dois JOINs por requisição — para uma flexibilidade que, numa base, ninguém configura. Em
 código, o grant é revisável no diff, testável e não exige migração para mudar.
+
+### O papel `silver` fica fora da hierarquia, e o `admin` não lê o bronze
+A conta de sistema da camada silver tem só `bronze:ler` e `bronze:ler-de-todos`, num ramo que
+não parte de papel nenhum (`_SILVER` em `authz.py`). E nenhum papel da hierarquia lê o bronze.
+**Por quê:** a silver é um sistema, não uma pessoa: não cadastra veículo nem envia
+telemetria. O bronze guarda dado pessoal (onde e como cada um dirige), e o `admin` precisa
+resolver disputas de VIN, não ler a telemetria de todos: menor privilégio dos dois lados.
+`tests/test_authz.py` reprova se os dois conjuntos se cruzarem.
+**Descartado:** a silver como `usuario` com o bronze a mais (poderia cadastrar e enviar);
+o bronze dentro do `admin` (a hierarquia daria a leitura a quem só administra).
+**Consequência:** o papel só nasce pela CLI (`flask create-user --role silver`). O cadastro
+público, quando existir, cria sempre `usuario`.
 
 ### O papel mora só no banco, nunca no token
 A autorização lê `current_user.role`, da linha que o `user_lookup_loader` já carregou.
