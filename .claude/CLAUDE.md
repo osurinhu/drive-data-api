@@ -29,7 +29,7 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 4. Autorização é declarada: a rota exige **permissão** (nunca papel, nunca `if`). Escopo de dono
    explícito em toda chamada de serviço, sem default. Sem permissão = 403; recurso de outro dono = 404.
 5. Erro de domínio = exceção em `app/service/errors.py` + linha em `ERROR_STATUS`
-   (`app/http_errors.py`). Rota não tem `try/except`.
+   (`app/blueprint/http_errors.py`). Rota não tem `try/except`.
 6. O schema é a única fonte da saída: campo fora do schema não aparece na API.
 7. Segredo só via variável `FLASK_*` / `.env`, nunca em arquivo versionado. Nunca exiba o `.env`.
 

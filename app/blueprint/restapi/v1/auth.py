@@ -6,10 +6,10 @@ from flask.views import MethodView
 from flask_jwt_extended import create_access_token, current_user
 from flask_smorest import Blueprint
 
+from blueprint.http_errors import error_responses
 from ext.api import PUBLIC
 from ext.auth import authenticated
 from ext.container import Container
-from http_errors import error_responses
 from schemas.auth_schema import LoginSchema, TokenSchema, UserSchema
 from service.auth_service import AuthService
 

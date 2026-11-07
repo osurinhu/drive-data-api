@@ -2,7 +2,7 @@
 
 from marshmallow import Schema, fields, validate
 
-from authz import Role, permissions_of
+from domain.authz import Role, permissions_of
 
 
 class LoginSchema(Schema):

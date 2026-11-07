@@ -153,7 +153,7 @@ product_repository = providers.Factory(ProductRepository)
 product_service = providers.Factory(ProductService, repository=product_repository)
 ```
 
-### 1.7 Permissões — `app/authz.py`
+### 1.7 Permissões — `app/domain/authz.py`
 
 A rota vai declarar a capacidade que exige, então ela precisa existir primeiro.
 Duas edições, no mesmo arquivo:
@@ -361,7 +361,7 @@ class RateLimitError(ServiceError):
     """Excedeu o limite de requisições."""
 ```
 
-**2.** A linha no mapa, em `app/http_errors.py`:
+**2.** A linha no mapa, em `app/blueprint/http_errors.py`:
 
 ```python
 ERROR_STATUS = {
@@ -438,8 +438,9 @@ Duas regras:
 - **Exatamente uma função `init_app(app)`** por módulo. É a convenção que o carregador
   espera.
 - **Nenhuma extensão importa outra extensão.** Se duas precisarem da mesma coisa, essa
-  coisa vira um módulo neutro na raiz de `app/` — foi exatamente o caso de
-  `http_errors.py` e de `instrumentation/`. As duas extensões que já são importadas por
+  coisa vira um módulo neutro fora de `ext/` — foi exatamente o caso de
+  `blueprint/http_errors.py` e de `instrumentation/` — ou, se for vocabulário puro, uma folha
+  do domínio (`app/domain/`). As duas extensões que já são importadas por
   outras, e por quê, estão nas [regras de dependência](01-arquitetura.md#regras-de-dependência).
 
 A ordem da lista é a ordem de inicialização. `ext.observability` fica primeiro (para que o
@@ -548,7 +549,7 @@ processo, no compose.
 ## 10. Autorização
 
 As três coisas que você vai querer fazer, da mais comum para a mais rara. O vocabulário
-inteiro mora em `app/authz.py`.
+inteiro mora em `app/domain/authz.py`.
 
 ### 10.1 Restringir uma rota
 
@@ -556,7 +557,7 @@ A classe declara o **piso** do recurso; o método que exige mais acrescenta o se
 
 ```python
 # app/blueprint/restapi/v1/product.py
-from authz import Permission
+from domain.authz import Permission
 from ext.auth import current_owner_scope, permission_required
 
 
@@ -601,7 +602,7 @@ Três detalhes que importam:
 
 Duas linhas, nessa ordem:
 
-1. O membro em `Permission` (`app/authz.py`), no formato `recurso:verbo`.
+1. O membro em `Permission` (`app/domain/authz.py`), no formato `recurso:verbo`.
 2. A concessão em `ROLE_PERMISSIONS`, a pelo menos um papel.
 
 ```python
@@ -624,7 +625,7 @@ rota inacessível para todo mundo, sem erro nenhum que apontasse para cá.
 Quatro passos — o terceiro é o que costuma ser esquecido, porque é o único que toca o
 banco.
 
-1. O membro em `Role` (`app/authz.py`).
+1. O membro em `Role` (`app/domain/authz.py`).
 2. A entrada em `ROLE_PERMISSIONS`, de preferência a partir de um papel existente
    (`_REVISOR = _USUARIO | {Permission.ITEM_LER_DE_TODOS}`). Papel que não estende nenhum
    (uma conta de sistema, como a `silver`) é um ramo à parte, com o próprio `frozenset`.

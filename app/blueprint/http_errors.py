@@ -1,8 +1,8 @@
 """Envelope de erro HTTP e mapeamento das exceções de domínio.
 
-Módulo folha, fora de ``ext/``: ``error_response`` é usado por duas extensões
-(``ext.error_handler`` e ``ext.auth``), e mantê-lo aqui preserva a invariante de
-que nenhuma extensão importa outra.
+Mora na camada de apresentação HTTP, fora de ``ext/``: ``error_response`` é usado
+por duas extensões (``ext.error_handler`` e ``ext.auth``) e pelas rotas, e mantê-lo
+aqui preserva a invariante de que nenhuma extensão importa outra.
 """
 
 from collections.abc import Callable
@@ -11,7 +11,7 @@ from typing import Any
 from flask import jsonify
 from werkzeug.http import HTTP_STATUS_CODES
 
-from request_context import current_request_id
+from instrumentation.request_context import current_request_id
 from schemas.error_schema import ApiErrorSchema
 from service.errors import (
     AuthenticationError,

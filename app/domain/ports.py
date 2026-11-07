@@ -1,6 +1,6 @@
 """Portas do pipeline de telemetria: interfaces (``Protocol``) e os tipos que elas trocam.
 
-Módulo folha: não importa nada do projeto nem biblioteca de infraestrutura. Os
+Folha do domínio: não importa nada do projeto nem biblioteca de infraestrutura. Os
 serviços do pipeline dependem destas interfaces, e os adaptadores (repositórios,
 mensageria) as implementam sem herdar delas: ``Protocol`` é estrutural. Assim a
 regra se testa com dublês, e o processo que usa a regra não carrega o ORM.
@@ -31,7 +31,7 @@ class VehicleAuthorization(Protocol):
     """A posse que o producer consulta antes de publicar."""
 
     def authorized_vins(self, user_id: int, vins: Collection[str]) -> dict[str, AuthorizedVehicle]:
-        """Dos VINs informados, já na forma canônica (``vin.normalize_vin``), os
+        """Dos VINs informados, já na forma canônica (``domain.vin.normalize_vin``), os
         de veículos ativos pelos quais o usuário pode enviar, com o vínculo. Os
         demais ficam fora do dicionário."""
         ...

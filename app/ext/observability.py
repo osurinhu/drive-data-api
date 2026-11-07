@@ -10,7 +10,7 @@ import logging
 
 from flask import Flask, g
 
-from request_context import REQUEST_ID_HEADER, resolve_request_id
+from instrumentation.request_context import REQUEST_ID_HEADER, resolve_request_id
 
 LOG_FORMAT = "%(asctime)s %(levelname)-8s [%(name)s] %(message)s"
 

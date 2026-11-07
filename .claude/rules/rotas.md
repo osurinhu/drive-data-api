@@ -26,7 +26,7 @@ Molde: `app/blueprint/restapi/v1/item.py`. Receitas: 03-como-estender §1.8, §2
 - Escopo de dono: leitura `current_owner_scope(Permission.X_LER_DE_TODOS)`; escrita e exclusão
   `current_owner_scope(Permission.X_ESCREVER_DE_TODOS)`; criação `current_user.id` (criar exige
   dono concreto — `ANY_OWNER` levantaria `TypeError`).
-- `@error_responses(blp, 403, 404, 409)` (de `http_errors`) lista o que **esta** rota produz.
+- `@error_responses(blp, 403, 404, 409)` (de `blueprint.http_errors`) lista o que **esta** rota produz.
   Nunca 401 (global no spec). 422 só em rota sem `@blp.arguments` que possa levantar
   `BusinessRuleError` (como o `arquivar` da §2); onde há `@blp.arguments`, o smorest já o documenta.
 - O payload de `@blp.arguments` vem antes do parâmetro de URL: `def patch(self, payload, x_id)`.

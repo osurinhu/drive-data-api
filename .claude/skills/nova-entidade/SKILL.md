@@ -51,7 +51,7 @@ fixa o padrão de permissões e escopo para esse caso — proponha ao usuário (
 5. **Schemas** (`app/schemas/product_schema.py`): os cinco, com limites iguais ao `String(n)` das
    colunas e o validador "ao menos um campo" no Update.
 6. **Container** (`app/ext/container.py`): `product_repository` e `product_service`.
-7. **Permissões** (`app/authz.py`): os quatro membros em `Permission` e as concessões nos papéis.
+7. **Permissões** (`app/domain/authz.py`): os quatro membros em `Permission` e as concessões nos papéis.
 8. **Rota** (`app/blueprint/restapi/v1/product.py`): copie `item.py` inteiro (View base com o
    piso, Collection e Resource) e troque os nomes. Cada método de escrita mantém o seu
    `@permission_required`. Descrição do `Blueprint` e docstrings em pt-BR, escritas para o cliente

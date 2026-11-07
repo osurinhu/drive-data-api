@@ -2,8 +2,8 @@
 
 from marshmallow import Schema, ValidationError, fields, validate, validates_schema
 
+from domain.vin import INVALID_VIN_MESSAGE, is_valid_vin
 from schemas.pagination_schema import PageSchema, PaginationQuerySchema
-from vin import INVALID_VIN_MESSAGE, is_valid_vin
 
 #: Acompanha o `String(50)` da coluna. O VIN não tem limite de tamanho aqui: o
 #: formato já fixa 17 caracteres depois da normalização.

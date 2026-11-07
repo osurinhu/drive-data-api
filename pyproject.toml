@@ -26,20 +26,15 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "app",
-    "authz",
     "blueprint",
     "domain",
     "ext",
-    "http_errors",
     "instrumentation",
     "messaging",
-    "ports",
     "repository",
-    "request_context",
     "schemas",
     "service",
     "tests",
-    "vin",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -73,8 +68,6 @@ files = [
     "app/schemas",
     "app/messaging",
     "app/instrumentation",
-    "app/ports.py",
-    "app/vin.py",
 ]
 mypy_path = "app"
 explicit_package_bases = true

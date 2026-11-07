@@ -9,9 +9,9 @@ from dataclasses import fields
 
 from flask import g
 
-from authz import ROLE_PERMISSIONS, Permission, Role
+from blueprint.http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
+from domain.authz import ROLE_PERMISSIONS, Permission, Role
 from ext.api import api
-from http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
 from instrumentation.probes import registered_probes
 from schemas.error_schema import ApiErrorSchema
 from schemas.health_schema import HealthSchema
@@ -30,7 +30,7 @@ def _concrete_subclasses(cls: type) -> set[type]:
 
 def test_toda_excecao_de_dominio_tem_status_http():
     """Falhou? Você criou uma exceção em `service/errors.py` e esqueceu de
-    mapeá-la em `http_errors.ERROR_STATUS`. Sem o mapa ela cairia no handler
+    mapeá-la em `blueprint.http_errors.ERROR_STATUS`. Sem o mapa ela cairia no handler
     genérico e viraria um 500 — com este teste, vira erro de CI."""
     nao_mapeadas = _concrete_subclasses(ServiceError) - set(ERROR_STATUS)
 
@@ -57,7 +57,7 @@ def test_envelope_de_paginacao_do_servico_e_do_schema_nao_divergem():
 
 
 def test_envelope_de_erro_do_codigo_e_do_schema_nao_divergem(app):
-    """O par do teste acima, para o envelope de erro: `http_errors` monta e
+    """O par do teste acima, para o envelope de erro: `blueprint.http_errors` monta e
     `ApiErrorSchema` documenta, e é o schema que o cliente lê no OpenAPI."""
     with app.test_request_context():
         g.request_id = "um-id-qualquer"
@@ -90,7 +90,7 @@ ROTAS_PUBLICAS = {
 
 
 def test_todo_papel_tem_entrada_em_role_permissions():
-    """Falhou? Você acrescentou um papel em `app/authz.py` e não disse o que ele
+    """Falhou? Você acrescentou um papel em `app/domain/authz.py` e não disse o que ele
     pode. `permissions_of` devolveria conjunto vazio e o papel novo não
     conseguiria fazer nada — sem nenhum erro que apontasse para cá."""
     sem_permissoes = set(Role) - set(ROLE_PERMISSIONS)

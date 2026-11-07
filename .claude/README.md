@@ -17,7 +17,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | Arquivo | Para quê | Carrega quando |
 |---|---|---|
 | `CLAUDE.md` | fontes de verdade, invariantes, armadilhas do ambiente, fluxo | toda sessão |
-| `rules/rotas.md`, `servicos.md`, `repositorios.md`, `schemas.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `mensageria.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
+| `rules/rotas.md`, `servicos.md`, `repositorios.md`, `schemas.md`, `dominio.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `mensageria.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
 | `rules/infra.md`, `documentacao.md`, `pasta-claude.md` | Docker, CI e dependências; manutenção da doc; manutenção desta pasta | idem |
 | `skills/verificar/` (`SKILL.md` + `verificar.sh`) | `/verificar`: as etapas do CI, no Docker | `/verificar`, ou quando o Claude for testar |
 | `skills/migracao/` | `/migracao`: gerar, revisar e validar migração Alembic | `/migracao`, ou ao mudar modelo |
@@ -192,3 +192,24 @@ que muda uma regra de projeto e por isso é decisão do usuário:
     `rules/testes.md`, `/nova-entidade` e `test_authz.py`).
   - **Ambiente:** o `Result.tuples()` do SQLAlchemy 2.1 está obsoleto (o `Row` já desempacota
     com tipo); com o `select` do SQLAlchemy em vez do `db.select`, o mypy vê o tipo das colunas.
+- **2026-11-07 — passo 1.2b: só o `app.py` na raiz de `app/`.** Pedido do usuário, que escolheu
+  o `domain/` para o vocabulário (no lugar de um pacote `kernel/`).
+  - **Para onde foram:** `authz.py`, `vin.py` e `ports.py` → `domain/` (folhas);
+    `request_context.py` → `instrumentation/`; `http_errors.py` → `blueprint/`.
+  - **A regra das folhas:** `tests/unit/test_fronteiras.py` nasce com ela (o ORM `base`/`models`
+    é a exceção nomeada) e já reprovou de propósito `import flask` e `from domain import models`.
+  - **Regras:** nasce `rules/dominio.md`. Os `paths` de `modelos-e-migracoes.md`,
+    `autorizacao.md` e `extensoes-e-config.md` seguiram os arquivos.
+  - **Ambiente:** o `ruff check --fix` é bloqueado, então a ordem dos imports foi corrigida à mão.
+  - **Revisão** (`revisor-arquitetura`, sem bloqueantes). O que mudou por causa dela:
+    - o `test_fronteiras` passou de lista de proibidos para lista de permitidos. A versão
+      anterior aceitava `psycopg`, `werkzeug` ou `jwt` numa folha;
+    - o teste ganhou a regra do ORM e a do `__init__.py` sem import;
+    - o `test_composicao` passou a proibir o `blueprint` no consumer;
+    - a decisão ganhou o **Custo aceito** (o ORM reconhecido pelo nome) e o `domain/orm/` no
+      **Descartado**;
+    - a `01-arquitetura` e a `extensoes-e-config.md` agora dizem por que `ext` → `blueprint`
+      não forma ciclo;
+    - a `dominio.md` (e a `mensageria.md`, que já faltava) entrou no mapa e na lista do revisor.
+  - **Fim de linha:** o `smoke.sh` estava com CRLF no disco, apesar do `eol=lf`. O conteúdo no
+    git era o mesmo; voltou para LF com `sed -i 's/\r$//'`.

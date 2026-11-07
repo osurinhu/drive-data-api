@@ -1,6 +1,6 @@
 """Vocabulário do VIN: a forma canônica e a regra do formato.
 
-Módulo folha: não importa nada do projeto. O schema recusa o formato, o serviço
+Folha do domínio: não importa nada do projeto. O schema recusa o formato, o serviço
 grava a forma canônica, e quem consulta a posse de um VIN usa a mesma forma.
 
 O formato é o da ISO 3779 (17 caracteres, sem I, O e Q), **sem** o dígito

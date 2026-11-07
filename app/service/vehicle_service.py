@@ -1,14 +1,14 @@
 """Serviço de veículos.
 
 Quem cadastra é o dono do veículo, o gestor. O VIN é gravado na forma canônica
-(`vin.normalize_vin`), que é a forma em que a posse é consultada depois.
+(`domain.vin.normalize_vin`), que é a forma em que a posse é consultada depois.
 """
 
 from domain.models import Vehicle
+from domain.vin import INVALID_VIN_MESSAGE, is_valid_vin, normalize_vin
 from repository.sql.vehicle_repository import VehicleRepository
 from service.base_service import BaseService
 from service.errors import BusinessRuleError
-from vin import INVALID_VIN_MESSAGE, is_valid_vin, normalize_vin
 
 
 class VehicleService(BaseService[Vehicle]):

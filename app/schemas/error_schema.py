@@ -1,6 +1,6 @@
 """Envelope de erro, para documentar as respostas de falha no OpenAPI.
 
-Precisa espelhar exatamente o que ``http_errors.error_response`` monta.
+Precisa espelhar exatamente o que ``blueprint.http_errors.error_response`` monta.
 
 O nome da classe é ``ApiErrorSchema`` (e não ``ErrorSchema``) de propósito: o
 apispec deriva o nome do componente removendo o sufixo "Schema", e "Error" já é

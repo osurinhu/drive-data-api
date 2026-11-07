@@ -15,8 +15,8 @@ from functools import wraps
 from flask import Flask, g
 from flask_jwt_extended import JWTManager, current_user, verify_jwt_in_request
 
-from authz import Permission, has_permission
-from http_errors import error_response
+from blueprint.http_errors import error_response
+from domain.authz import Permission, has_permission
 from repository.sql.user_repository import UserRepository
 from service.base_service import ANY_OWNER, OwnerScope
 from service.errors import PermissionDeniedError
@@ -103,7 +103,7 @@ def permission_required(*permissions: Permission):
         def wrapper(*args, **kwargs):
             _verificar_token_uma_vez()
             if not has_permission(current_user.role, *exigidas):
-                # 403 pelo mapa de `http_errors`: falta de permissão para a
+                # 403 pelo mapa de `blueprint.http_errors`: falta de permissão para a
                 # OPERAÇÃO, decidida antes de qualquer consulta. Recurso de outro
                 # dono responde 404 (ver `BaseService._assert_ownership`).
                 raise PermissionDeniedError("Seu perfil não permite esta operação.")

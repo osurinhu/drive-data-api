@@ -3,8 +3,8 @@ from collections.abc import Collection
 from sqlalchemy import select
 
 from domain.models import Vehicle
+from domain.ports import AuthorizedVehicle, SenderRelation
 from ext.database import db
-from ports import AuthorizedVehicle, SenderRelation
 from repository.sql.base_repository import BaseRepository
 
 
@@ -13,7 +13,7 @@ class VehicleRepository(BaseRepository[Vehicle]):
         super().__init__(Vehicle)
 
     def authorized_vins(self, user_id: int, vins: Collection[str]) -> dict[str, AuthorizedVehicle]:
-        """Implementa ``ports.VehicleAuthorization``. Hoje o único vínculo é o de
+        """Implementa ``domain.ports.VehicleAuthorization``. Hoje o único vínculo é o de
         dono: o cadastro de motoristas ainda não existe.
 
         Uma consulta só, qualquer que seja o tamanho do lote, servida pelo índice

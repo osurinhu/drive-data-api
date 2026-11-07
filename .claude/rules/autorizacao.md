@@ -1,12 +1,12 @@
 ---
 paths:
-  - "app/authz.py"
+  - "app/domain/authz.py"
   - "app/ext/auth.py"
 ---
 
-# Autorização (`app/authz.py`, `app/ext/auth.py`)
+# Autorização (`app/domain/authz.py`, `app/ext/auth.py`)
 
-`authz.py` é módulo folha: não importa nada do projeto, para que rota, serviço, modelo e schema
+`authz.py` é folha do domínio (ver `rules/dominio.md`): não importa nada do projeto, para que rota, serviço, modelo e schema
 usem o mesmo vocabulário sem ciclo. Receitas: 03-como-estender §1.7 e §10; decisões em
 02-decisoes, seção Segurança.
 

@@ -1,7 +1,7 @@
 """Exceções de domínio.
 
 Cada condição tem seu tipo, mapeado para HTTP num lugar só
-(``http_errors.ERROR_STATUS``). Os projetos de origem reaproveitavam exceções
+(``blueprint.http_errors.ERROR_STATUS``). Os projetos de origem reaproveitavam exceções
 embutidas com significados trocados, e por isso cada rota tinha um try/except
 gigante; aqui nenhuma tem.
 """

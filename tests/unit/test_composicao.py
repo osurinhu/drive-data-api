@@ -159,9 +159,9 @@ def _montar_num_processo_a_parte(perfil: str, imprime: str, **variaveis: str) ->
 
 def test_o_consumer_sobe_sem_postgres_sem_jwt_e_sem_importar_os_dois():
     """O consumer monta a aplicação sem URI do banco e sem chave JWT, e nem
-    importa as bibliotecas deles. Num processo à parte: na suíte, o SQLAlchemy
-    já está carregado."""
-    proibidos = {"sqlalchemy", "flask_sqlalchemy", "flask_jwt_extended", "psycopg"}
+    importa as bibliotecas deles nem a camada HTTP (``blueprint``). Num processo
+    à parte: na suíte, o SQLAlchemy já está carregado."""
+    proibidos = {"sqlalchemy", "flask_sqlalchemy", "flask_jwt_extended", "psycopg", "blueprint"}
 
     importados = _montar_num_processo_a_parte(
         "consumer",

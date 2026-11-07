@@ -1,6 +1,6 @@
 ---
 name: migracao
-description: Gera, revisa e valida uma migração Alembic depois de mudar modelos em app/domain/ — entidade nova, campo novo, índice, restrição ou papel novo em authz.Role. Use sempre que um modelo mudar ou quando o alembic check acusar divergência. Cuida das armadilhas do projeto, como o rebuild do container antes do autogenerate, a numeração sequencial (0002, 0003…) e a restrição CHECK de papéis, que o autogenerate não detecta.
+description: Gera, revisa e valida uma migração Alembic depois de mudar modelos em app/domain/ — entidade nova, campo novo, índice, restrição ou papel novo em domain.authz.Role. Use sempre que um modelo mudar ou quando o alembic check acusar divergência. Cuida das armadilhas do projeto, como o rebuild do container antes do autogenerate, a numeração sequencial (0002, 0003…) e a restrição CHECK de papéis, que o autogenerate não detecta.
 argument-hint: "<descrição curta, ex.: adiciona products>"
 ---
 
@@ -47,7 +47,7 @@ O autogenerate **não detecta** (escreva à mão, com `alembic revision --rev-id
       não `UniqueConstraint`.
 - [ ] Nomes de restrição completos dentro de `op.f()` (sem ele a convenção de `domain/base.py` é
       aplicada por cima: `ck_users_ck_users_role`).
-- [ ] Valores de enum ou papel escritos à mão na migração, nunca importados de `authz`: a migração
+- [ ] Valores de enum ou papel escritos à mão na migração, nunca importados de `domain.authz`: a migração
       descreve o schema do momento em que foi escrita.
 - [ ] Datas `sa.DateTime(timezone=True)`; FK com `ondelete` e índice.
 - [ ] `downgrade()` desfaz exatamente o `upgrade()`, na ordem inversa.

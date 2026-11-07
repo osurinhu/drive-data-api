@@ -4,7 +4,7 @@ Uma **permissão** é uma capacidade (`item:escrever`); um **papel** é um pacot
 nomeado de permissões, e é o papel que fica gravado em `users.role`. A rota
 declara a permissão que exige, nunca o papel.
 
-Módulo folha: não importa nada do projeto, então qualquer camada pode usá-lo sem
+Folha do domínio: não importa nada do projeto, então qualquer camada pode usá-lo sem
 criar ciclo. O raciocínio e as alternativas descartadas estão em
 `documentacao/02-decisoes.md`, seção Segurança.
 """

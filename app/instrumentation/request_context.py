@@ -1,8 +1,8 @@
 """Identificador da requisição atual.
 
-Módulo folha: não importa nada da aplicação, então serve tanto à extensão que
-instala os hooks (``ext.observability``) quanto ao utilitário que monta as
-respostas de erro (``http_errors``), sem criar dependência entre eles.
+Não importa nada da aplicação, então serve tanto à extensão que instala os hooks
+(``ext.observability``) quanto ao que monta as respostas de erro
+(``blueprint.http_errors``), sem criar dependência entre eles.
 """
 
 import re

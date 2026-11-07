@@ -21,8 +21,8 @@ para ler arquivos, use Read, Grep e Glob — nunca `cat`, `head` ou `sed`.
 ## Referências — leia as que a mudança toca
 
 - `.claude/rules/<camada>.md` de cada camada alterada: `rotas`, `servicos`, `repositorios`,
-  `schemas`, `modelos-e-migracoes`, `autorizacao`, `extensoes-e-config`, `testes`, `infra`,
-  `documentacao`.
+  `schemas`, `dominio`, `modelos-e-migracoes`, `autorizacao`, `extensoes-e-config`,
+  `mensageria`, `testes`, `infra`, `documentacao`.
 - `documentacao/01-arquitetura.md` (camadas e dependências), `documentacao/03-como-estender.md`
   (receitas e checklist) e `documentacao/02-decisoes.md`. Antes de apontar algo como estranho,
   confira se não é decisão registrada ali.
@@ -38,8 +38,10 @@ para ler arquivos, use Read, Grep e Glob — nunca `cat`, `head` ou `sed`.
    Docstring de método de rota é pública (1º parágrafo = `summary`, resto = `description` no
    OpenAPI): nota para desenvolvedor ali é Sugestão de mover para comentário.
 2. **Dependências**: a seta nunca aponta para cima; extensão não importa extensão (exceções
-   aceitas: `ext.config` e `ext.database`); `authz.py` e `request_context.py` não importam nada
-   do projeto, e qualquer camada pode usá-los; `http_errors.py` não é folha e é usado por
+   aceitas: `ext.config` e `ext.database`); as folhas do domínio (tudo em `domain/` menos
+   `base.py` e `models.py`) só importam outras folhas, sem o ORM nem infraestrutura, e qualquer
+   camada pode usá-las (o `tests/unit/test_fronteiras.py` reprova); vocabulário novo vai para
+   `domain/`, nunca solto na raiz de `app/`; `blueprint/http_errors.py` não é folha e é usado por
    extensões e rotas (`error_responses`), nunca por serviço, repositório, modelo ou schema; imports
    a partir de `app/`, nunca `from app.`; `app/app.py` intocado.
 3. **Autorização**: piso na classe (`decorators = [permission_required(...)]` ou `authenticated`);

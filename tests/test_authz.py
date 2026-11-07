@@ -12,7 +12,7 @@ O que estes testes fixam, e que nenhum teste de CRUD pegaria:
 * o papel é lido do banco, não do token.
 """
 
-from authz import ROLE_PERMISSIONS, Permission, Role, has_permission, permissions_of
+from domain.authz import ROLE_PERMISSIONS, Permission, Role, has_permission, permissions_of
 
 ITEM_URL = "/api/v1/item/"
 

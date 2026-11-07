@@ -73,7 +73,7 @@ tempo.
 | **Rota** | `app/blueprint/restapi/v1/` | Traduzir HTTP em chamada de serviço. Validar entrada por schema, devolver a saída. | Montar consulta, conter regra de negócio, usar `try/except` para erro de domínio |
 | **Serviço** | `app/service/` | Regra de negócio, validação semântica, ownership, controle de transação. | Tocar no ORM direto, saber o que é HTTP (status, header, request) |
 | **Repositório** | `app/repository/` (uma subpasta por tecnologia; hoje, `sql/`) | Única camada que lê e grava dados: o SQL mora em `repository/sql/`. Traduz intenção em consulta. | Conter regra de negócio ou decidir permissão |
-| **Modelo** | `app/domain/` | Mapear tabela para classe. Colunas e relacionamentos. | Conter comportamento de negócio |
+| **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `ports.py`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
 | **Schema** | `app/schemas/` | Único contrato de entrada e saída da API. Valida e serializa. | Acessar banco |
 
 O primeiro nível de pasta é o papel (a camada). O segundo nível é a tecnologia e só existe
@@ -86,12 +86,8 @@ E a infraestrutura, fora do caminho da requisição:
 | Módulo | Papel |
 |---|---|
 | `app/ext/` | Extensões. **Cada módulo expõe exatamente uma função `init_app(app)`** — é essa convenção que permite o carregador tratá-las de forma uniforme. |
-| `app/http_errors.py` | Envelope de erro e o mapa exceção → status HTTP. Fica fora de `ext/` porque é usado por duas extensões diferentes; se morasse em uma delas, a outra passaria a depender dela. |
-| `app/request_context.py` | Id da requisição. Módulo folha: não importa nada do projeto, então pode ser usado por qualquer camada sem criar ciclo. |
-| `app/authz.py` | Papéis, permissões e o mapa entre eles. Módulo folha, pelo mesmo motivo: o modelo grava o papel, a extensão decide com ele, a rota declara a permissão que exige e o schema publica as do usuário. |
-| `app/vin.py` | Vocabulário do VIN: a regra do formato (ISO 3779, sem o dígito verificador) e a forma canônica. Módulo folha: o schema recusa o formato, o serviço grava a forma canônica e a consulta de posse a usa. |
-| `app/ports.py` | Portas do pipeline de telemetria: interfaces (`Protocol`) e os tipos que elas trocam. Módulo folha: os serviços do pipeline dependem delas e os adaptadores as implementam sem herdar (o `VehicleRepository.authorized_vins` implementa `VehicleAuthorization`). |
-| `app/instrumentation/` | Peças de observação usadas por mais de uma extensão. Hoje é o registro das sondas do health (`probes.py`): cada extensão que conecta um serviço registra a sua sonda, e a rota do health executa as registradas. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
+| `app/blueprint/http_errors.py` | Envelope de erro e o mapa exceção → status HTTP. Mora na camada HTTP, fora de `ext/`, porque é usado por duas extensões diferentes e pelas rotas; se morasse numa extensão, a outra passaria a depender dela. |
+| `app/instrumentation/` | Peças de observação usadas por mais de uma extensão: o registro das sondas do health (`probes.py`; cada extensão que conecta um serviço registra a sua, e a rota do health executa as registradas) e o id da requisição (`request_context.py`), que vai para o log e para o envelope de erro. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
 | `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika) e o cliente da API de gerenciamento (`management.py`, só stdlib). Recebe URL e prazos de quem chama e não importa `ext`, `repository` nem `blueprint`. |
 
 ---
@@ -99,17 +95,23 @@ E a infraestrutura, fora do caminho da requisição:
 ## Regras de dependência
 
 ```
-rota      →  serviço, schema, ext, http_errors, instrumentation (só o health)
+rota      →  serviço, schema, ext, instrumentation
 serviço   →  repositório, domínio
-repositório → domínio, ext.database, ports
-domínio   →  (nada do projeto)
-schema    →  (nada do projeto)
+repositório → domínio, ext.database
+domínio   →  o ORM, o SQLAlchemy e o próprio domínio; as folhas, só outras folhas
+schema    →  folhas do domínio
 instrumentation, messaging  →  (nada do projeto)
 ```
 
 As extensões são a raiz de composição e importam das camadas o que precisam montar. Duas
-peças novas só são importadas por elas: `instrumentation/`, por qualquer extensão e pela rota
-do health, e `messaging/`, por enquanto só pelo `ext.rabbitmq`.
+peças novas são importadas quase só por elas: `instrumentation/`, por qualquer extensão, pela
+rota do health e pelo envelope de erro (`blueprint/http_errors.py`, que lê o id da
+requisição), e `messaging/`, por enquanto só pelo `ext.rabbitmq`.
+
+Quando a extensão importa `blueprint.http_errors`, a dependência entre os dois pacotes corre
+nos dois sentidos (a rota importa `ext.auth`, que importa `blueprint.http_errors`). Ela fica sem
+ciclo porque o `blueprint/__init__.py` não importa nada e o `http_errors.py` não importa `ext`.
+Mantenha as duas coisas assim.
 
 As sondas do health são a única ressalva ao "SQL só no repositório": o `SELECT 1` de
 `ext/database.py` (e o `ping` de `ext/mongo.py`) verifica a conexão e não lê dado nenhum.
@@ -117,8 +119,8 @@ As sondas do health são a única ressalva ao "SQL só no repositório": o `SELE
 Duas regras que valem a pena memorizar:
 
 1. **Nenhuma extensão importa outra extensão.** Se duas precisam da mesma coisa, essa coisa
-   vira um módulo neutro na raiz de `app/` (foi o caso de `http_errors.py` e de
-   `instrumentation/`). A ressalva são
+   vira um módulo neutro (foi o caso de `blueprint/http_errors.py` e de
+   `instrumentation/`) ou, se for vocabulário puro, uma folha do domínio. A ressalva são
    duas peças de que o resto já depende, e que por isso outras extensões podem importar:
    `ext.config`, o carregador que o factory chama antes da lista (dele `ext.api` tira o
    `load_routes`), e `ext.database`, dona do `db` que os repositórios também importam (e que
@@ -126,8 +128,8 @@ Duas regras que valem a pena memorizar:
 2. **A seta nunca aponta para cima.** Serviço não importa rota, repositório não importa
    serviço. Se você sentir essa necessidade, a lógica está na camada errada.
 
-Os **módulos folha** da raiz de `app/` (`authz.py`, `request_context.py`, `vin.py`, `ports.py`) são a exceção
-prevista pela regra 1: como não importam nada do projeto, qualquer camada pode importá-los
+As **folhas do domínio** (`domain/authz.py`, `domain/vin.py`, `domain/ports.py`) são a exceção
+prevista pela regra 1: como só importam outras folhas, qualquer camada pode importá-las
 sem criar ciclo nem acoplar duas camadas uma à outra. É o que permite rota, serviço,
 modelo e schema falarem do mesmo vocabulário de permissões.
 
@@ -153,7 +155,7 @@ O parâmetro de tipo (`BaseRepository[Item]`) é o que faz o type checker saber 
 ### Autorização
 
 Uma **permissão** é uma capacidade (`item:escrever`). Um **papel** é um pacote nomeado de
-permissões, e é o papel que fica gravado em `users.role`. Os dois ficam em `app/authz.py`,
+permissões, e é o papel que fica gravado em `users.role`. Os dois ficam em `app/domain/authz.py`,
 junto do mapa entre eles:
 
 ```python
@@ -233,7 +235,7 @@ próprio.
 ### Erros
 
 A rota não trata erro. O serviço levanta uma exceção de `app/service/errors.py`, e o mapa
-`ERROR_STATUS` em `app/http_errors.py` a traduz em status:
+`ERROR_STATUS` em `app/blueprint/http_errors.py` a traduz em status:
 
 | Exceção | Status |
 |---|---|
@@ -281,13 +283,9 @@ cada operação de escrita (receita 1.10 de `03-como-estender.md`).
 ```
 app/
   app.py                     create_app() — não conhece nenhuma extensão
-  http_errors.py             envelope de erro + mapa exceção → HTTP
-  request_context.py         id da requisição (módulo folha)
-  authz.py                   papéis, permissões e o mapa entre eles (módulo folha)
-  vin.py                     formato e forma canônica do VIN (módulo folha)
-  ports.py                   portas do pipeline: Protocol e os tipos que trocam (módulo folha)
   instrumentation/
     probes.py                registro das sondas do health
+    request_context.py       id da requisição
   messaging/                 RabbitMQ
     connection.py            parâmetros de conexão (pika) + sonda do broker
     management.py            cliente da API de gerenciamento (vhosts, permissões)
@@ -303,9 +301,12 @@ app/
     cors.py                  origens permitidas
     error_handler.py         registra os handlers a partir do mapa
     commands.py              comandos `flask ...`
-  domain/
+  domain/                    o ORM (base, models) e as folhas (o resto)
     base.py                  BaseModel (campos de controle, convenção de nomes)
     models.py                User, Item, Vehicle
+    authz.py                 papéis, permissões e o mapa entre eles (folha)
+    vin.py                   formato e forma canônica do VIN (folha)
+    ports.py                 portas do pipeline: Protocol e os tipos que trocam (folha)
   repository/                uma subpasta por tecnologia
     sql/                     SQLAlchemy: a única parte que monta consulta SQL
       base_repository.py     CRUD genérico
@@ -327,6 +328,8 @@ app/
     auth_schema.py
     item_schema.py
     vehicle_schema.py
+  blueprint/
+    http_errors.py           envelope de erro + mapa exceção → HTTP
   blueprint/restapi/v1/
     health.py                prontidão por dependência e vida (/health/live), públicas
     auth.py                  token e identidade

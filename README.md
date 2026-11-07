@@ -114,19 +114,14 @@ Com `FLASK_PROCESS=api` no `.env`, a aplicação sobe como o processo `api` e ne
 ```
 app/
   app.py                  create_app(): factory; não conhece nenhuma extensão
-  http_errors.py          envelope de erro + mapa exceção → HTTP
-  request_context.py      id da requisição
-  authz.py                papéis, permissões e o mapa entre eles
-  vin.py                  formato e forma canônica do VIN
-  ports.py                portas do pipeline de telemetria (interfaces e os tipos que trocam)
-  instrumentation/        observação usada por mais de uma extensão (sondas do health)
+  instrumentation/        observação usada por mais de uma extensão (sondas do health, id da requisição)
   messaging/              RabbitMQ: conexão, sonda e API de gerenciamento
   ext/                    infraestrutura — cada módulo expõe init_app(app)
-  domain/                 modelos ORM
+  domain/                 modelos ORM e o vocabulário puro (papéis e permissões, VIN, portas)
   repository/             acesso a dados, uma subpasta por tecnologia (sql/: o único lugar que monta SQL)
   service/                regra de negócio, validação, ownership
   schemas/                contrato de entrada/saída (marshmallow)
-  blueprint/restapi/v1/   rotas — uma por recurso
+  blueprint/              camada HTTP: envelope de erro e, em restapi/v1/, as rotas (uma por recurso)
 migrations/               Alembic
 tests/                    pytest: a raiz usa Postgres; unit/, mongo/, rabbitmq/ e e2e/ (os três), o que o nome diz
 docker/                   entrypoint, setup.sh (o job de preparação) e, por serviço, os scripts de init
@@ -267,7 +262,7 @@ CI compara com o que o spec declara aberto, então nenhuma rota fica pública po
 
 Autorização é por **permissão**, não por papel: cada rota declara a capacidade que exige
 (`permission_required(Permission.ITEM_ESCREVER)`), e os papéis são pacotes de permissões
-definidos em `app/authz.py`. Falta de permissão para a operação responde **403**; recurso
+definidos em `app/domain/authz.py`. Falta de permissão para a operação responde **403**; recurso
 que existe mas é de outro dono responde **404**. O papel é lido do banco a cada
 requisição, então promover ou rebaixar alguém vale na hora, sem esperar o token expirar.
 
@@ -303,7 +298,7 @@ Detalhes e o raciocínio por trás:
 - [ ] Conferir que o build de produção usa `target: runtime` — o estágio `dev` carrega as
       ferramentas de teste e não deve ir para produção.
 - [ ] Rever `JWT_ACCESS_TOKEN_EXPIRES` (padrão: 1 hora) e considerar refresh tokens.
-- [ ] Revisar `ROLE_PERMISSIONS` em `app/authz.py` — os papéis que acompanham a base são um
+- [ ] Revisar `ROLE_PERMISSIONS` em `app/domain/authz.py` — os papéis que acompanham a base são um
       ponto de partida, não um modelo de permissões pronto — e conferir quem está como
       `admin`: `flask shell` ou `SELECT name, role FROM users WHERE role <> 'usuario';`.
 - [ ] Ajustar `WEB_CONCURRENCY` à CPU disponível e refazer a conta do pool de conexões.

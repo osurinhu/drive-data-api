@@ -2,7 +2,7 @@
 
 import pytest
 
-from vin import is_valid_vin, normalize_vin
+from domain.vin import is_valid_vin, normalize_vin
 
 #: O VIN do payload de exemplo (Renault do Brasil). O H na 9ª posição não passa
 #: na conta do dígito verificador norte-americano, que não é exigido aqui.

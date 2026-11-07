@@ -2,8 +2,8 @@
 
 import pytest
 
-from authz import Role
-from ports import AuthorizedVehicle, SenderRelation
+from domain.authz import Role
+from domain.ports import AuthorizedVehicle, SenderRelation
 from service.base_service import ANY_OWNER
 from service.errors import BusinessRuleError
 

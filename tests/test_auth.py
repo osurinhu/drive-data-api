@@ -2,7 +2,7 @@
 
 import jwt
 
-from authz import ROLE_PERMISSIONS, Role
+from domain.authz import ROLE_PERMISSIONS, Role
 
 
 def test_token_com_credenciais_validas(client, make_user):

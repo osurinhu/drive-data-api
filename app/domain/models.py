@@ -9,7 +9,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from authz import Role
+from domain.authz import Role
 from domain.base import BaseModel
 
 #: VARCHAR + CHECK, e não o tipo ENUM nativo do Postgres (o porquê está em
@@ -89,7 +89,7 @@ class Vehicle(BaseModel):
         ),
     )
 
-    # Sempre na forma canônica (`vin.normalize_vin`), gravada pelo serviço.
+    # Sempre na forma canônica (`domain.vin.normalize_vin`), gravada pelo serviço.
     vin: Mapped[str] = mapped_column(String(17))
     nickname: Mapped[str | None] = mapped_column(String(50), default=None)
 

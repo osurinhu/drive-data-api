@@ -2,7 +2,7 @@
 
 As exceções de domínio levantadas pelo serviço viram código HTTP aqui — por
 isso as rotas não têm try/except. O mapeamento mora em
-``http_errors.ERROR_STATUS``; este módulo só gera um handler por entrada.
+``blueprint.http_errors.ERROR_STATUS``; este módulo só gera um handler por entrada.
 
 Cuidado: o handler genérico de ``Exception`` **não pode** engolir
 ``HTTPException``, senão as respostas 422 de validação do flask-smorest (e todo
@@ -14,8 +14,8 @@ from collections.abc import Callable
 from flask import Flask, current_app
 from werkzeug.exceptions import HTTPException
 
-from http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
-from request_context import current_request_id
+from blueprint.http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
+from instrumentation.request_context import current_request_id
 from service.errors import ServiceError
 
 

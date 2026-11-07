@@ -5,10 +5,10 @@ from flask.views import MethodView
 from flask_jwt_extended import current_user
 from flask_smorest import Blueprint
 
-from authz import Permission
+from blueprint.http_errors import error_responses
+from domain.authz import Permission
 from ext.auth import current_owner_scope, permission_required
 from ext.container import Container
-from http_errors import error_responses
 from schemas.vehicle_schema import (
     VehicleCreateSchema,
     VehiclePageSchema,

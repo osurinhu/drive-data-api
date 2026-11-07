@@ -22,7 +22,7 @@ import pytest
 from flask import Flask
 from sqlalchemy import event
 
-from authz import Role
+from domain.authz import Role
 from ext.config import PROCESS_ENVVAR, build_config
 
 DEFAULT_TEST_DATABASE_URI = "postgresql+psycopg://baseapi:baseapi@localhost:5432/baseapi_test"

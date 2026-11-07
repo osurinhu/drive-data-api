@@ -2,8 +2,7 @@
 paths:
   - "app/ext/**/*.py"
   - "app/app.py"
-  - "app/http_errors.py"
-  - "app/request_context.py"
+  - "app/blueprint/http_errors.py"
   - "app/instrumentation/**/*.py"
   - "settings.toml"
   - ".env.example"
@@ -30,11 +29,14 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
 - Extensão não importa extensão. A ressalva de 01-arquitetura ("Regras de dependência"):
   `ext.config` (o carregador `load_routes`, usado por `ext.api`) e `ext.database` (a instância
   `db`, usada por repositórios e por `ext.commands`) podem ser importadas. Algo novo que duas
-  extensões precisem vira módulo neutro na raiz de `app/`, como `instrumentation/` ou o
-  `http_errors.py` — que não é
-  folha (importa `service.errors`) e é usado só por extensões e rotas. `authz.py` e
-  `request_context.py` são folhas.
-- `ERROR_STATUS` (`http_errors.py`) é o único mapa exceção → status; `STATUS_DESCRIPTION` alimenta
+  extensões precisem vira módulo neutro fora de `ext/`, como `instrumentation/` (que guarda o
+  `request_context.py`) ou o `blueprint/http_errors.py` — que não é folha (importa
+  `service.errors`) e é usado só por extensões e rotas. Ele nunca importa `ext`, e o
+  `blueprint/__init__.py` fica sem import: a rota importa `ext.auth`, que importa
+  `blueprint.http_errors`, e qualquer um dos dois fecharia o ciclo. Vocabulário puro vira folha
+  do domínio (`rules/dominio.md`). Nada novo fica solto na raiz de `app/`: lá só mora o
+  `app.py`.
+- `ERROR_STATUS` (`blueprint/http_errors.py`) é o único mapa exceção → status; `STATUS_DESCRIPTION` alimenta
   a mensagem padrão e o OpenAPI. O handler genérico não engole `HTTPException`.
 - Configuração não sensível vai para `settings.toml` (`[default]`). Sensível vai para variável
   `FLASK_*`, documentada em `.env.example` com valor de exemplo, nunca real. Leitura:

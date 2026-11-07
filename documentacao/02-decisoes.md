@@ -45,6 +45,42 @@ camada da base e as receitas); pastas por processo de deploy (o mesmo módulo se
 processo, e a composição já é decidida no `settings.toml`).
 **Custo aceito:** imports um nível mais longos (`from repository.sql.user_repository import ...`).
 
+### Na raiz de `app/`, só o `app.py`; o vocabulário mora no domínio
+Cada arquivo que ficava solto na raiz foi para a camada cuja regra ele segue:
+- **`authz.py`, `vin.py` e `ports.py` → `domain/`.** São vocabulário do negócio (papéis e
+  permissões, o formato do VIN, as portas do pipeline), que qualquer camada e qualquer processo
+  importa. O import diz a camada: `from domain.vin import ...`.
+- **`request_context.py` → `instrumentation/`.** É correlação: o mesmo id vai para o log e para
+  o envelope de erro, e o consumer também vai precisar dele, sem importar a camada HTTP.
+- **`http_errors.py` → `blueprint/`.** O envelope de erro é contrato HTTP, e quem o usa são as
+  rotas e as extensões HTTP. Quando a extensão importa a camada, é a raiz de composição em ação.
+
+O `app.py` fica: é o ponto de entrada (`app:create_app()`).
+
+O `domain/` passa a ter duas partes. O **ORM** é a exceção nomeada (`base.py`, `models.py`), e
+**todo o resto é folha**: só importa outras folhas, sem o ORM, nenhuma outra camada e nenhuma
+infraestrutura. Assim o consumer importa `domain.ports` sem carregar o SQLAlchemy. O
+`domain/__init__.py` fica sem import pelo mesmo motivo.
+**Rede de segurança:** o `tests/unit/test_fronteiras.py` lê os imports com `ast` e confere
+listas de permitidos: a folha só importa a stdlib, o marshmallow e outras folhas; o ORM, o
+SQLAlchemy e o próprio domínio; o `__init__.py`, nada. O arquivo novo do domínio cai na regra
+estrita sozinho, e só a lista do ORM escapa dela.
+**Custo aceito:** as duas regras dividem uma pasta, ao contrário do "um prefixo por regra" da
+decisão anterior. O ORM é reconhecido pelo nome, em dois lugares: o conjunto `ORM` do teste e
+os `paths` de `rules/modelos-e-migracoes.md`. É a lista que aquela decisão evita, mas virada ao
+contrário: ela nomeia a exceção, e não a regra, então quem esquecer dela recebe a regra estrita
+(falha fechada). E são dois nomes que mudam raramente.
+**Descartado:**
+- um pacote próprio para as folhas (`kernel/` ou `core/`), que daria uma pasta por regra ao
+  custo de um pacote a mais, com um nome que não diz a camada;
+- um `domain/orm/` com os dois arquivos do ORM, que daria o prefixo por regra ao custo de uma
+  pasta de dois arquivos (o critério da decisão anterior a recusa) e de alongar o import mais
+  usado do projeto;
+- mover os modelos ORM para `repository/sql/` e deixar um `domain/` puro, que trocaria as quatro
+  camadas da base por causa de três arquivos de vocabulário;
+- deixar a raiz plana, que ganhava um arquivo a cada passo, com o critério "não coube em outro
+  lugar".
+
 ### Um perfil por processo, escolhido por `FLASK_PROCESS`
 A mesma imagem roda o `api`, o `bronze-api`, o job `setup` e, adiante, o consumer da fila. Cada
 processo tem uma seção no `settings.toml` com as próprias `EXTENSIONS` e `API_V1_ROUTES`. O que
@@ -141,7 +177,7 @@ dele; a disputa é resolvida pelo `admin`, que tem os escopos de veículo de tod
 revela que o VIN está cadastrado, o que não é segredo: o VIN vem gravado no próprio carro.
 
 ### VIN no formato ISO 3779, sem o dígito verificador
-`vin.py` aceita 17 letras e dígitos sem I, O e Q, em qualquer caixa e com espaços nas
+`domain/vin.py` aceita 17 letras e dígitos sem I, O e Q, em qualquer caixa e com espaços nas
 pontas, e grava a forma canônica (maiúsculas, sem os espaços). O schema recusa o formato
 com erro por campo; o serviço normaliza e recusa de novo, para quem não passa por schema,
 no mesmo arranjo do nome vazio (acima). O VIN não muda depois do cadastro: o PATCH só
@@ -219,7 +255,7 @@ deixava aberta, sem nenhum aviso. Agora esquecer **fecha**.
 ### Permissões nomeadas, agrupadas em papéis
 Uma permissão é uma capacidade (`item:escrever`); um papel é um pacote de permissões; o
 usuário guarda o papel. A rota declara a **permissão** que exige, nunca o papel, e o mapa
-`ROLE_PERMISSIONS` (em `app/authz.py`) é a única fonte de verdade.
+`ROLE_PERMISSIONS` (em `app/domain/authz.py`) é a única fonte de verdade.
 **Por quê:** separa *quem pode* de *quem é*. Mudar a regra passa a ser reescrever um mapa
 de cinco linhas, e não caçar verificações espalhadas pelas rotas. A hierarquia entre papéis
 fica sendo inclusão de conjuntos, o que a torna verificável em vez de convencionada.
@@ -242,7 +278,7 @@ código, o grant é revisável no diff, testável e não exige migração para m
 
 ### O papel `silver` fica fora da hierarquia, e o `admin` não lê o bronze
 A conta de sistema da camada silver tem só `bronze:ler` e `bronze:ler-de-todos`, num ramo que
-não parte de papel nenhum (`_SILVER` em `authz.py`). E nenhum papel da hierarquia lê o bronze.
+não parte de papel nenhum (`_SILVER` em `domain/authz.py`). E nenhum papel da hierarquia lê o bronze.
 **Por quê:** a silver é um sistema, não uma pessoa: não cadastra veículo nem envia
 telemetria. O bronze guarda dado pessoal (onde e como cada um dirige), e o `admin` precisa
 resolver disputas de VIN, não ler a telemetria de todos: menor privilégio dos dois lados.

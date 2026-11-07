@@ -4,12 +4,12 @@ import click
 from flask import Flask, current_app
 from flask.cli import with_appcontext
 
-from authz import Role
+from domain.authz import Role
 from ext.database import db
 from service.errors import ConflictError, NotFoundError
 
 #: Opção reutilizada pelos comandos que recebem um papel. `click.Choice` sai da
-#: própria enumeração: acrescentar um papel em `authz.py` acrescenta a opção
+#: própria enumeração: acrescentar um papel em `domain/authz.py` acrescenta a opção
 #: aqui, sem segunda lista para manter em dia.
 PAPEIS = click.Choice([role.value for role in Role])
 
