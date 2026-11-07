@@ -1,0 +1,29 @@
+# Segredos — nunca versionar
+.env
+.env.*
+!.env.example
+.secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Ferramentas
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editores / SO
+.vscode/*
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# requirements.lock.txt É versionado de propósito — é ele que garante que o
+# build Docker de hoje e o de amanhã instalem exatamente as mesmas versões.

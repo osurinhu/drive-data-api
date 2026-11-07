@@ -1,0 +1,26 @@
+# Núcleo da aplicação.
+# Versões exatas onde já validadas em produção nos projetos de origem;
+# faixas limitadas (>=,<) no resto. Para builds reprodutíveis, gere um lock:
+#   pip freeze > requirements.lock.txt
+
+# --- Framework web e camada de API -------------------------------------------
+Flask==3.1.2
+flask-smorest>=0.44,<1.0
+marshmallow>=3.21,<4.0
+
+# --- Persistência -------------------------------------------------------------
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy>=2.0,<3.0
+psycopg[binary]>=3.1,<4.0
+alembic>=1.13,<2.0
+
+# --- Autenticação -------------------------------------------------------------
+Flask-JWT-Extended==4.7.1
+
+# --- Infraestrutura transversal ----------------------------------------------
+dependency-injector>=4.42,<5.0
+dynaconf==3.2.11
+flask-cors==6.0.1
+
+# --- Servidor WSGI ------------------------------------------------------------
+gunicorn>=21.2,<24.0

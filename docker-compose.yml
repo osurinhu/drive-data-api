@@ -1,0 +1,87 @@
+name: base-api
+
+# Sobe a aplicação e o banco com um comando: `docker compose up --build`.
+# As variáveis vêm do .env (copie de .env.example). A sintaxe ${VAR:?...} faz o
+# compose falhar com mensagem clara em vez de subir com segredo vazio.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-baseapi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: ${POSTGRES_DB:-baseapi}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baseapi} -d ${POSTGRES_DB:-baseapi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      # Exposto para que a suíte de testes e ferramentas de banco alcancem o
+      # Postgres da máquina host. Remova em produção.
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      # Roda na primeira inicialização do volume: cria também o banco de testes.
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+
+  api:
+    build:
+      context: .
+      # `target` é obrigatório aqui: sem ele o Docker constrói o ÚLTIMO estágio
+      # do Dockerfile, que é o `dev` — e a aplicação subiria rodando pytest.
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        # Só inicia quando o pg_isready do banco passar — as migrações do
+        # entrypoint dependem disso.
+        condition: service_healthy
+    environment:
+      FLASK_SQLALCHEMY_DATABASE_URI: >-
+        postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}
+      FLASK_SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
+      FLASK_JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env}
+      # Lido nativamente pelo gunicorn. Ao aumentar, refaça a conta do pool de
+      # conexões documentada no settings.toml.
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    healthcheck:
+      # A imagem slim não tem curl; usa a stdlib do próprio Python.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:5000/api/v1/health/')
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Dá tempo das migrações rodarem antes de contar falhas.
+      start_period: 30s
+    ports:
+      - "5000:5000"
+    volumes:
+      # Conveniência de desenvolvimento: sem este bind mount, as revisões
+      # criadas por `alembic revision --autogenerate` dentro do container
+      # ficariam presas no sistema de arquivos dele e seriam perdidas.
+      # Remova em produção — a imagem já traz as migrações.
+      - ./migrations:/srv/migrations
+
+  # Suíte de testes. Sob `profiles`, então NÃO sobe junto com `docker compose up`.
+  # Uso: docker compose run --rm test
+  test:
+    build:
+      context: .
+      target: dev
+    profiles: ["test"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FLASK_TEST_DATABASE_URI: >-
+        postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}_test
+      FLASK_SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
+      FLASK_JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env}
+
+volumes:
+  db_data:

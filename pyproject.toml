@@ -1,0 +1,70 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# migrations/versions: arquivos gerados pelo Alembic.
+# *.md: os exemplos de código da documentação são escritos para leitura humana
+# (comentários alinhados, `...` como corpo) — não devem reprovar o CI.
+extend-exclude = ["migrations/versions", "*.md"]
+# `app/` é a raiz dos imports da aplicação — é daqui que o ruff descobre o que
+# é módulo local (`ext`, `domain`, `service`, ...) e o que é dependência.
+src = ["app", "."]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RET", # flake8-return
+    "ARG", # argumentos não usados
+    "DTZ", # datetime sem timezone — o schema usa TIMESTAMPTZ, o código deve acompanhar
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "app",
+    "authz",
+    "blueprint",
+    "domain",
+    "ext",
+    "http_errors",
+    "repository",
+    "request_context",
+    "schemas",
+    "service",
+    "tests",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Blueprints usam `Provide[...]` como default de argumento — padrão do
+# dependency-injector, e os módulos de rota são importados pelo wiring.
+"app/blueprint/**" = ["B008"]
+# ARG002 nos serviços: um gancho entrega o contexto inteiro e cada implementação
+# usa o que precisa — hoje `ItemService.before_update` recebe o modelo carregado
+# e só mexe em `changes`. Sinalizar isso puniria o ponto de extensão.
+"app/service/**" = ["ARG002"]
+
+[tool.pytest.ini_options]
+# `app/` é a raiz do sys.path da aplicação (mesma convenção dos projetos de
+# origem, que rodam `cd app && flask run`).
+pythonpath = ["app"]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.mypy]
+python_version = "3.12"
+# Escopo deliberadamente restrito às camadas de lógica pura, onde a tipagem é
+# limpa e o retorno é maior. Blueprints e extensões dependem de decorators do
+# Flask/smorest/dependency-injector cuja tipagem é imperfeita: incluí-los agora
+# geraria ruído, e um mypy ruidoso é um mypy que se aprende a ignorar.
+# Amplie o escopo conforme as camadas forem ficando tipadas.
+files = ["app/service", "app/repository", "app/domain", "app/schemas"]
+mypy_path = "app"
+explicit_package_bases = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

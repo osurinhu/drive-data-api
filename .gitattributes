@@ -1,0 +1,5 @@
+# Scripts shell rodam em Linux (docker/entrypoint.sh, dentro do container) e no Git
+# Bash (.claude/skills/verificar/verificar.sh). Com CRLF, `#!/bin/sh` vira `/bin/sh\r`
+# e o container `api` não sobe. No Windows, o `core.autocrlf=true` converteria esses
+# arquivos no checkout; esta linha fixa LF independentemente da configuração local.
+*.sh text eol=lf

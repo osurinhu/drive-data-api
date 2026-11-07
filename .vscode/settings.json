@@ -1,0 +1,11 @@
+{
+  "//": "app/ é a raiz dos imports da aplicação (ver README). Sem esta linha, o Pylance não resolve 'from ext import ...' e marca todo import local como erro.",
+  "python.analysis.extraPaths": ["app"],
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "[python]": {
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  }
+}

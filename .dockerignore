@@ -1,0 +1,20 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+.github
+.vscode
+README.md
+
+# `tests/` NÃO entra aqui: o estágio `dev` do Dockerfile precisa dele. A imagem
+# de produção não o recebe porque o estágio `runtime` usa COPY explícito.

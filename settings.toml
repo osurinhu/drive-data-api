@@ -1,0 +1,75 @@
+# Configuração da aplicação (Dynaconf).
+#
+# REGRA: este arquivo é versionado, portanto NÃO contém segredos.
+# Valores sensíveis (SECRET_KEY, JWT_SECRET_KEY, SQLALCHEMY_DATABASE_URI) vêm de
+# variáveis de ambiente com o prefixo FLASK_, carregadas do .env (não versionado).
+# Ex.: FLASK_JWT_SECRET_KEY no ambiente  ->  app.config["JWT_SECRET_KEY"]
+# Veja .env.example para a lista completa.
+
+[default]
+
+# --- Identidade e documentação da API ----------------------------------------
+API_TITLE = "Base API"
+API_VERSION = "v1"
+OPENAPI_VERSION = "3.0.3"
+OPENAPI_URL_PREFIX = "/api/v1"
+OPENAPI_SWAGGER_UI_PATH = "/"
+OPENAPI_SWAGGER_UI_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist/"
+OPENAPI_JSON_PATH = "openapi.json"
+
+# --- Flask --------------------------------------------------------------------
+# Deixe PROPAGATE_EXCEPTIONS desligado: o handler global converte exceções não
+# tratadas em um 500 com o envelope padrão (ver app/ext/error_handler.py).
+PROPAGATE_EXCEPTIONS = false
+
+LOG_LEVEL = "INFO"
+
+# --- Persistência -------------------------------------------------------------
+# Sem valor padrão de propósito: a URI precisa vir do ambiente.
+# A aplicação falha na inicialização com mensagem explícita se estiver vazia.
+SQLALCHEMY_DATABASE_URI = ""
+
+# Pool de conexões. A conta que importa:
+#   (workers do gunicorn) x (pool_size + max_overflow)  <=  max_connections do Postgres
+# Com os padrões abaixo e WEB_CONCURRENCY=2: 2 x 10 = 20 conexões no pior caso,
+# folgado para o padrão de 100 do Postgres. Ao subir os workers, refaça a conta.
+#   pool_pre_ping: descarta conexão morta antes de usar (evita o primeiro erro
+#                  depois de o banco reiniciar).
+#   pool_recycle:  recicla conexão após 30min, antes que proxy ou firewall
+#                  derrube a ociosa e o erro apareça só em produção.
+SQLALCHEMY_ENGINE_OPTIONS = { pool_pre_ping = true, pool_size = 5, max_overflow = 5, pool_recycle = 1800 }
+
+# --- Autenticação -------------------------------------------------------------
+# 3600s = 1h. Os projetos de origem usavam 48h, longo demais para um padrão.
+JWT_ACCESS_TOKEN_EXPIRES = 3600
+
+# --- CORS ---------------------------------------------------------------------
+# Restrinja para os domínios do seu frontend antes de ir para produção.
+CORS_ORIGINS = ["*"]
+
+# Os limites de paginação ficam em app/schemas/pagination_schema.py, junto do
+# schema que os valida — para não haver duas fontes de verdade.
+
+# --- Registro dinâmico de módulos --------------------------------------------
+# Cada item de EXTENSIONS é um módulo que expõe init_app(app). A ordem importa:
+# "ext.api" fica por último porque registra os blueprints, que dependem de todo
+# o resto já estar inicializado.
+# "ext.config" NÃO entra aqui — create_app() já o inicializa explicitamente.
+EXTENSIONS = [
+    "ext.observability",
+    "ext.database",
+    "ext.container",
+    "ext.auth",
+    "ext.cors",
+    "ext.error_handler",
+    "ext.commands",
+    "ext.api",
+]
+
+# Cada item é um módulo que expõe um Blueprint chamado `blp`, registrado como
+# filho do blueprint /api/v1. Adicionar uma rota nova = adicionar uma linha aqui.
+API_V1_ROUTES = [
+    "blueprint.restapi.v1.health",
+    "blueprint.restapi.v1.auth",
+    "blueprint.restapi.v1.item",
+]
