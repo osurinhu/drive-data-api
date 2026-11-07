@@ -31,6 +31,8 @@ known-first-party = [
     "domain",
     "ext",
     "http_errors",
+    "instrumentation",
+    "messaging",
     "repository",
     "request_context",
     "schemas",
@@ -60,8 +62,16 @@ python_version = "3.12"
 # limpa e o retorno é maior. Blueprints e extensões dependem de decorators do
 # Flask/smorest/dependency-injector cuja tipagem é imperfeita: incluí-los agora
 # geraria ruído, e um mypy ruidoso é um mypy que se aprende a ignorar.
-# Amplie o escopo conforme as camadas forem ficando tipadas.
-files = ["app/service", "app/repository", "app/domain", "app/schemas"]
+# Amplie o escopo conforme as camadas forem ficando tipadas. `messaging` e
+# `instrumentation` entram desde o início: não dependem desses decorators.
+files = [
+    "app/service",
+    "app/repository",
+    "app/domain",
+    "app/schemas",
+    "app/messaging",
+    "app/instrumentation",
+]
 mypy_path = "app"
 explicit_package_bases = true
 ignore_missing_imports = true

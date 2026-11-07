@@ -65,11 +65,11 @@ docker compose exec api alembic revision --autogenerate -m "adiciona products"
 docker compose exec api alembic upgrade head
 ```
 
-### 1.3 Repositório — `app/repository/product_repository.py`
+### 1.3 Repositório — `app/repository/sql/product_repository.py`
 
 ```python
 from domain.models import Product
-from repository.base_repository import BaseRepository
+from repository.sql.base_repository import BaseRepository
 
 
 class ProductRepository(BaseRepository[Product]):
@@ -88,7 +88,7 @@ O `[Product]` não é decoração: é o que faz `get_by_id()` ser tipado como
 
 ```python
 from domain.models import Product
-from repository.product_repository import ProductRepository
+from repository.sql.product_repository import ProductRepository
 from service.base_service import BaseService, OwnerScope
 
 
@@ -232,14 +232,30 @@ Para o recurso de item único (`/product/<int:product_id>`), copie `ItemResource
 
 ### 1.9 Ativar — `settings.toml`
 
+A linha entra em duas listas: a do `[default]`, que a suíte e o desenvolvimento local usam, e a
+do perfil do processo que serve a rota. As rotas de negócio ficam no `[api]`.
+
 ```toml
+[default]
 API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
-    "blueprint.restapi.v1.product",   # ← só isso
+    "blueprint.restapi.v1.product",   # ← aqui
+]
+
+[api]
+API_V1_ROUTES = [
+    "blueprint.restapi.v1.health",
+    "blueprint.restapi.v1.auth",
+    "blueprint.restapi.v1.item",
+    "blueprint.restapi.v1.product",   # ← e aqui
 ]
 ```
+
+Esquecer qualquer uma das duas reprova em `tests/unit/test_composicao.py`, que exige o
+`[default]` igual à união dos perfis. Ele não diz se o perfil é o certo: para isso, a rota
+ganha as suas linhas no `/smoke-api`, que sobe o perfil `api`.
 
 ### 1.10 Testes — `tests/test_product.py`
 
@@ -284,8 +300,8 @@ escritas da receita 1.10). Sem esse teste, esquecer o decorator passa no CI.
 
 ## 3. Consulta nova
 
-Consulta que o CRUD genérico não cobre entra como método no **repositório** — nunca no
-serviço:
+Consulta que o CRUD genérico não cobre entra como método no **repositório** (em
+`app/repository/sql/`), nunca no serviço:
 
 ```python
 class ItemRepository(BaseRepository[Item]):
@@ -404,7 +420,7 @@ def init_app(app: Flask) -> None:
 ```
 
 ```toml
-# settings.toml
+# settings.toml: no [default] E no perfil de cada processo que usa a extensão
 EXTENSIONS = [
     "ext.observability",
     "ext.database",
@@ -420,11 +436,45 @@ Duas regras:
   espera.
 - **Nenhuma extensão importa outra extensão.** Se duas precisarem da mesma coisa, essa
   coisa vira um módulo neutro na raiz de `app/` — foi exatamente o caso de
-  `http_errors.py`. As duas extensões que já são importadas por outras, e por quê, estão
-  nas [regras de dependência](01-arquitetura.md#regras-de-dependência).
+  `http_errors.py` e de `instrumentation/`. As duas extensões que já são importadas por
+  outras, e por quê, estão nas [regras de dependência](01-arquitetura.md#regras-de-dependência).
 
 A ordem da lista é a ordem de inicialização. `ext.observability` fica primeiro (para que o
 resto já logue com request id), `ext.api` por último.
+
+A extensão entra no `[default]` e no perfil de cada processo que a usa, e só nele: o processo
+que não a lista nem a importa ([perfis](01-arquitetura.md#um-perfil-por-processo)). O
+`tests/unit/test_composicao.py` reprova se o `[default]` deixar de ser a união dos perfis. Se
+algum processo nunca puder carregá-la, acrescente-a ao `FORA_DO_PERFIL` desse teste.
+
+**Se ela conecta um serviço externo**, o health do processo precisa saber dele:
+
+```python
+# app/ext/cache.py
+from instrumentation.probes import register_probe
+
+
+def _cache_responds() -> bool:
+    """Não levanta exceção: a falha é a resposta, registrada no log pela própria sonda."""
+    ...
+
+
+def init_app(app: Flask) -> None:
+    ...
+    register_probe(app, "cache", _cache_responds)
+```
+
+1. A sonda devolve `bool` e desiste antes de `HEALTH_PROBE_TIMEOUT_SECONDS`. Dependência lenta
+   não pode estourar o timeout do healthcheck do container.
+2. O campo `cache` entra no `HealthSchema` (`app/schemas/health_schema.py`). Sem ele, a chave
+   sumiria da resposta, e o `tests/test_contracts.py` reprova.
+3. Decida se ela é **crítica**. Se o processo não serve nada sem ela, acrescente-a ao
+   `HEALTH_CRITICAL` do perfil (a queda passa a responder 503 e tira o processo do
+   balanceador). Se não, ela aparece como `unreachable`, com `status` `degraded` e 200.
+4. A configuração obrigatória falha no `init_app`, com mensagem que nunca repete a URL, nem em
+   pedaços (ela leva a senha). O erro que a biblioteca dá ao ler a URL repete trechos dela:
+   troque-o por uma mensagem fixa, com `from None`, para que ele saia também do traceback. Os
+   moldes são `ext/mongo.py` e `messaging/connection.py`.
 
 ---
 
@@ -479,6 +529,13 @@ current_app.config["CACHE_TTL"]  # dentro de uma requisição
 
 Se o valor for obrigatório, falhe na inicialização com mensagem explícita — como
 `ext/database.py` e `ext/auth.py` fazem. Melhor não subir do que subir quebrado.
+
+**Valor diferente por processo** → declare a chave no `[default]` e repita-a na seção do perfil
+que precisa de outro valor, como o `HEALTH_CRITICAL` do `[bronze_api]`. A seção do perfil vale
+sobre o `[default]`, e uma lista declarada nela substitui a do `[default]` inteira. Repetir o
+valor do `[default]` também vale quando a escolha é do processo e merece ficar escrita nele,
+como o `HEALTH_CRITICAL` de cada perfil. Quem escolhe o perfil é a variável `FLASK_PROCESS` do
+processo, no compose.
 
 > Se o valor for usado **e** validado por um schema (como os limites de paginação), mantenha
 > a constante junto do schema, não na configuração — para não haver duas fontes de verdade.
@@ -616,6 +673,11 @@ E confira:
       `tests/test_contracts.py`, mas é melhor descobrir antes.) Cada método de escrita
       declara a sua: o piso de leitura da classe satisfaz o contrato, então só o teste de
       403 pega essa falta.
+- [ ] Módulo novo de `EXTENSIONS` ou de `API_V1_ROUTES` está no `[default]` **e** no perfil de
+      cada processo que o usa. Esquecer uma das duas reprova em `tests/unit/test_composicao.py`;
+      pôr no perfil errado, não.
+- [ ] Dependência externa nova registra a sua sonda, tem campo no `HealthSchema` e está, ou
+      não está, no `HEALTH_CRITICAL` de cada perfil por decisão consciente.
 - [ ] Campo novo aparece na API só se estiver no schema.
 - [ ] Teste cobrindo acesso de outro usuário (deve ser **404**) e, se a rota exige uma
       permissão que algum papel não tem, acesso sem ela em cada operação (deve ser **403** —

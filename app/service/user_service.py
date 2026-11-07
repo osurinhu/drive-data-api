@@ -8,7 +8,7 @@ from werkzeug.security import generate_password_hash
 
 from authz import Role
 from domain.models import User
-from repository.user_repository import UserRepository
+from repository.sql.user_repository import UserRepository
 from service.base_service import ANY_OWNER, BaseService
 from service.errors import BusinessRuleError, NotFoundError
 

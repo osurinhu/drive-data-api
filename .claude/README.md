@@ -17,7 +17,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | Arquivo | Para quê | Carrega quando |
 |---|---|---|
 | `CLAUDE.md` | fontes de verdade, invariantes, armadilhas do ambiente, fluxo | toda sessão |
-| `rules/rotas.md`, `servicos.md`, `repositorios.md`, `schemas.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
+| `rules/rotas.md`, `servicos.md`, `repositorios.md`, `schemas.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `mensageria.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
 | `rules/infra.md`, `documentacao.md`, `pasta-claude.md` | Docker, CI e dependências; manutenção da doc; manutenção desta pasta | idem |
 | `skills/verificar/` (`SKILL.md` + `verificar.sh`) | `/verificar`: as etapas do CI, no Docker | `/verificar`, ou quando o Claude for testar |
 | `skills/migracao/` | `/migracao`: gerar, revisar e validar migração Alembic | `/migracao`, ou ao mudar modelo |
@@ -25,7 +25,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | `skills/smoke-api/` (`SKILL.md` + `smoke.sh`) | `/smoke-api`: a imagem de produção num container avulso com banco descartável, conferida por HTTP | `/smoke-api`, ou ao pedir para rodar, subir ou testar a API |
 | `skills/medir-consultas/` | `/medir-consultas`: conta o SQL de uma operação e detecta N+1 (modelo de medição + modo `medir` do `verificar.sh`) | `/medir-consultas`, ou antes de otimizar consulta |
 | `agents/revisor-arquitetura.md` | revisão independente do diff, só leitura | ao fim de mudança não trivial |
-| `hooks/estado-docker.sh` | uma linha sobre o estado do Docker, do `db` e do `api` | início, retomada, `/clear` e compactação da sessão (hook `SessionStart`) |
+| `hooks/estado-docker.sh` | uma linha sobre o estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api` e `bronze-api` | início, retomada, `/clear` e compactação da sessão (hook `SessionStart`) |
 | `settings.json` | permissões e hooks do projeto (versionado) | toda sessão |
 
 Preferências pessoais vão em `settings.local.json`, que não é versionado.
@@ -114,3 +114,58 @@ que muda uma regra de projeto e por isso é decisão do usuário:
   - **Medido, não suposto:** com um dono só, o N+1 de muitos-para-um não aparece, porque o dono
     já está na sessão. Com 20 donos foram 23 SELECT; com `selectinload`, 4 constantes (1 a mais
     quando há um dono só). A regra de repositórios passou a pedir donos diferentes na medição.
+- 2026-11-07 — Pipeline de telemetria, passo 1.0, que só move arquivos:
+  - os repositórios da base foram para `app/repository/sql/`, a primeira subpasta por tecnologia
+    (02-decisoes, "Um nível de pasta por papel, outro por tecnologia");
+  - o `docker/initdb/` foi para `docker/postgres/initdb/`;
+  - `rules/repositorios.md` passou a valer só para `app/repository/sql/**`, porque o texto dela é
+    todo sobre SQL;
+  - o `/nova-entidade` aponta para o novo caminho do repositório.
+- 2026-11-07 — Pipeline de telemetria, passo 1.1 (infraestrutura mínima): Mongo e RabbitMQ no
+  compose e no CI, perfis por `FLASK_PROCESS`, health por dependência e `/health/live`, serviço
+  `bronze-api`, pastas de teste por infraestrutura.
+  - **Desvios do plano:**
+    - o job `setup` veio do passo 1.3, porque com dois processos HTTP a migração na subida já
+      disputava o banco;
+    - o `prometheus-client` ficou para a Fase 6, quando for usado, porque a base corrigiu
+      justamente dependência declarada e nunca usada;
+    - a sonda do banco foi para `ext/database.py`, e não ficou no `health.py`: assim a rota não
+      importa a extensão de serviço externo nenhum;
+    - o `test_composicao.py` mora em `tests/unit/`, porque não usa serviço;
+    - `messaging/connection.py` e `messaging/management.py` nasceram já aqui, porque a sonda e
+      a suíte precisam deles.
+  - **Regras e skills:** `rules/rotas.md` perdeu a exceção do `health.py`, que não trata mais
+    exceção nem importa o `db`. `extensoes-e-config.md`, `infra.md` e `testes.md` ganharam
+    perfis, sondas, job `setup` e pastas de teste. O `/migracao` passou a citar o `setup` no
+    lugar do entrypoint, e o `/verificar` ganhou o caso da dependência `unhealthy`. O hook
+    mostra os cinco serviços e levou 1,1 s quente (3,4 s a frio).
+  - **RabbitMQ na primeira subida do volume:** o healthcheck como root criou o `.erlang.cookie`
+    antes do servidor, que caiu com `eacces`. Ele passou a rodar com `gosu rabbitmq`.
+  - **Healthcheck sob carga:** o `mongosh` leva de 1 a 3 s parado e passou de 5 s durante um
+    build. O Mongo ficou `unhealthy` sem estar fora, e o `/verificar` saiu com `INFRA`. O
+    timeout foi para 20 s no Mongo e no RabbitMQ.
+  - **pika:** o `AMQPConnectionError` tem `str()` vazio e o motivo nos `args`, então a sonda
+    usa `describe_error` para logar.
+  - **Lock:** o cabeçalho do `requirements.lock.txt` passou a instalar o lock atual antes do
+    `pip freeze`, para que a dependência nova não atualize as outras.
+  - **`.env` do usuário:** o Claude acrescentou `MONGO_ROOT_PASSWORD` e
+    `RABBITMQ_ADMIN_PASSWORD`, com valores aleatórios que nunca foram exibidos.
+  - **Revisão do `revisor-arquitetura`:** nenhum bloqueante e sete achados importantes,
+    corrigidos:
+    - uma senha com `/` sem codificação aparecia em pedaços no erro do pika e do PyMongo. As
+      mensagens ficaram fixas, com `from None`, e o teste confere o traceback inteiro. O cliente
+      do Mongo passou a nascer na subida com `connect=False`, para validar a URI sem conectar;
+    - o `[setup]` declarava o Mongo e o RabbitMQ sem usá-los;
+    - o wiring do container importava todas as rotas em todo processo e passou a ligar só as do
+      perfil;
+    - os testes da raiz sondavam o Mongo e o RabbitMQ de verdade e passaram a usar dublês; o
+      teste com as três dependências de verdade foi para `tests/e2e/`, e o `mongo_db` deixou de
+      depender do Postgres;
+    - o `/nova-entidade` não citava os perfis;
+    - o `messaging/` estava sem regra e ganhou a `rules/mensageria.md`;
+    - o `test_composicao.py` gravava `app/` no `PYTHONPATH`, um sexto lugar do invariante, e
+      passou a repassar o `sys.path` da suíte.
+
+    As sugestões também entraram: a redação de "não importa extensão" e de "quatro processos",
+    o `HEALTH_CRITICAL = []` dos perfis sem rota, preparo, ação e verificação separados, o
+    timeout de 20 s no CI e o aviso de não expor o `/health/` na internet.

@@ -1,5 +1,5 @@
 from domain.models import Item
-from repository.base_repository import BaseRepository
+from repository.sql.base_repository import BaseRepository
 
 
 class ItemRepository(BaseRepository[Item]):

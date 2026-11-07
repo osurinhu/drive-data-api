@@ -14,7 +14,7 @@ trechos da documentação:
 | Peça | Molde |
 |---|---|
 | modelo | `Item` em `app/domain/models.py` |
-| repositório | `app/repository/item_repository.py` |
+| repositório | `app/repository/sql/item_repository.py` |
 | serviço | `app/service/item_service.py` |
 | schemas | `app/schemas/item_schema.py` |
 | rota | `app/blueprint/restapi/v1/item.py` |
@@ -43,7 +43,7 @@ fixa o padrão de permissões e escopo para esse caso — proponha ao usuário (
    `back_populates` exige os dois lados.
 2. **Migração**: siga a skill `/migracao` (rebuild do `api`, `--rev-id` sequencial, revisão do
    arquivo). A aplicação ainda sobe, porque nada mais referencia a entidade neste ponto.
-3. **Repositório** (`app/repository/product_repository.py`): `BaseRepository[Product]`;
+3. **Repositório** (`app/repository/sql/product_repository.py`): `BaseRepository[Product]`;
    `loader_options` se algum schema de saída aninhar relacionamento.
 4. **Serviço** (`app/service/product_service.py`): mensagens de 409 e 404 em pt-BR, `owned` e,
    para cada texto obrigatório, `_clean_text` no `before_create` e no `before_update`, como em
@@ -56,7 +56,9 @@ fixa o padrão de permissões e escopo para esse caso — proponha ao usuário (
    piso, Collection e Resource) e troque os nomes. Cada método de escrita mantém o seu
    `@permission_required`. Descrição do `Blueprint` e docstrings em pt-BR, escritas para o cliente
    da API (são publicadas no OpenAPI).
-9. **Ativar** (`settings.toml`): `"blueprint.restapi.v1.product"` em `API_V1_ROUTES`.
+9. **Ativar** (`settings.toml`): `"blueprint.restapi.v1.product"` em `API_V1_ROUTES` do
+   `[default]` **e** do perfil do processo que serve a rota (`[api]`, para as de negócio; 03
+   §1.9). O `tests/unit/test_composicao.py` reprova se ela estiver numa lista só.
 10. **Testes** (`tests/test_product.py`, a partir de `test_item.py`). Mínimo: criação; listagem
     paginada; 409 de duplicado; 422 de entrada inválida; exclusão lógica sumindo das consultas;
     404 para recurso de outro dono; 403 com `Role.LEITOR` em **cada** escrita (POST com

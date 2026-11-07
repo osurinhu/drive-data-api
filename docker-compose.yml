@@ -1,8 +1,20 @@
 name: base-api
 
-# Sobe a aplicação e o banco com um comando: `docker compose up --build`.
+# Sobe a aplicação e as dependências com um comando: `docker compose up --build`.
 # As variáveis vêm do .env (copie de .env.example). A sintaxe ${VAR:?...} faz o
 # compose falhar com mensagem clara em vez de subir com segredo vazio.
+#
+# Uma imagem só roda os processos da aplicação; FLASK_PROCESS escolhe o perfil de
+# cada um no settings.toml. Ordem de subida: db → setup (migra e termina) → api e
+# bronze-api. As senhas entram em URLs: use só letras, números, "-" e "_".
+
+# Base comum dos serviços que rodam a imagem de produção.
+x-runtime: &runtime
+  build:
+    context: .
+    # `target` é obrigatório aqui: sem ele o Docker constrói o ÚLTIMO estágio
+    # do Dockerfile, que é o `dev` — e a aplicação subiria rodando pytest.
+    target: runtime
 
 services:
   db:
@@ -24,30 +36,113 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
       # Roda na primeira inicialização do volume: cria também o banco de testes.
-      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+      # Cada serviço de terceiros tem a sua pasta em docker/ (aqui, postgres/).
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
 
-  api:
-    build:
-      context: .
-      # `target` é obrigatório aqui: sem ele o Docker constrói o ÚLTIMO estágio
-      # do Dockerfile, que é o `dev` — e a aplicação subiria rodando pytest.
-      target: runtime
+  # Camada bronze da telemetria. O banco da aplicação e o de testes nascem no
+  # primeiro uso, sem script de init.
+  mongo:
+    image: mongo:8.0
+    # Desenvolvimento: o cache do WiredTiger ocuparia por padrão metade da memória
+    # da VM do Docker, que no Docker Desktop costuma ser pequena.
+    command: ["--wiredTigerCacheSizeGB", "0.25"]
     restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?defina MONGO_ROOT_PASSWORD no .env}
+    healthcheck:
+      # O ping não exige autenticação. O mongosh é um Node.js inteiro, então roda a
+      # cada 2 s só na subida (start_interval), para o compose saber logo que o
+      # serviço está pronto, e depois a cada 30 s. Ele leva de 1 a 3 s parado e
+      # passou de 5 s durante um build: com timeout curto, o Mongo virava
+      # "unhealthy" sem estar fora, e o `docker compose run test` recusava subir.
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+    ports:
+      # Só no host local, para a suíte e ferramentas fora do Docker. Remova em produção.
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  # Fila entre o recebimento dos lotes (api) e a gravação no bronze (consumer).
+  rabbitmq:
+    image: rabbitmq:4.4-management
+    # O nome do nó (rabbit@<hostname>) é a chave dos dados no volume. Sem hostname
+    # fixo, cada container recriado seria um nó novo, e o volume pareceria vazio.
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      # Usuário de administração e vhost da aplicação, criados na primeira subida
+      # do volume. Os usuários por processo, com permissões mínimas, vêm depois.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:?defina RABBITMQ_ADMIN_PASSWORD no .env}
+      RABBITMQ_DEFAULT_VHOST: drive-data
+    healthcheck:
+      # Os listeners de AMQP e do painel aceitam conexão (não só o nó de pé).
+      # Como `rabbitmq`, e não como root: na primeira subida do volume, o CLI que
+      # roda antes do servidor cria o .erlang.cookie, e um cookie do root derruba o
+      # servidor com eacces. O CLI sobe uma VM Erlang a cada execução: frequente só
+      # na subida e com folga no timeout, pelos mesmos motivos do Mongo.
+      test: ["CMD", "gosu", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 90s
+      start_interval: 3s
+    ports:
+      # AMQP e o painel de gerenciamento (http://localhost:15672), só no host local.
+      # Remova em produção.
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # Job de preparação (docker/setup.sh): migra o banco e termina. Os processos só
+  # sobem depois que ele termina com sucesso — com dois processos migrando no
+  # boot, os dois disputariam o mesmo banco vazio.
+  setup:
+    <<: *runtime
+    restart: "no"
     depends_on:
       db:
-        # Só inicia quando o pg_isready do banco passar — as migrações do
-        # entrypoint dependem disso.
         condition: service_healthy
     environment:
+      FLASK_PROCESS: setup
+      FLASK_SQLALCHEMY_DATABASE_URI: >-
+        postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}
+    entrypoint: ["/srv/docker/setup.sh"]
+
+  # Producer: cadastro, login, veículos e o recebimento dos lotes do app.
+  api:
+    <<: *runtime
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      # Sobe junto, sem esperar: o api funciona sem o broker (só o envio de lote
+      # depende dele) e informa o estado no health.
+      rabbitmq:
+        condition: service_started
+    environment:
+      FLASK_PROCESS: api
+      # Quem migra é o setup.
+      RUN_MIGRATIONS: "0"
       FLASK_SQLALCHEMY_DATABASE_URI: >-
         postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}
       FLASK_SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
       FLASK_JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env}
+      FLASK_AMQP_URL: >-
+        amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/drive-data
       # Lido nativamente pelo gunicorn. Ao aumentar, refaça a conta do pool de
       # conexões documentada no settings.toml.
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
-    healthcheck:
-      # A imagem slim não tem curl; usa a stdlib do próprio Python.
+    healthcheck: &healthcheck
+      # A imagem slim não tem curl; usa a stdlib do próprio Python. Um 503 (alguma
+      # dependência crítica fora) levanta exceção e conta como falha.
       test:
         - CMD
         - python
@@ -56,7 +151,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      # Dá tempo das migrações rodarem antes de contar falhas.
       start_period: 30s
     ports:
       - "5000:5000"
@@ -66,6 +160,29 @@ services:
       # ficariam presas no sistema de arquivos dele e seriam perdidas.
       # Remova em produção — a imagem já traz as migrações.
       - ./migrations:/srv/migrations
+
+  # API da camada silver: login e leitura do bronze. Fica na rede interna.
+  bronze-api:
+    <<: *runtime
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      mongo:
+        condition: service_healthy
+    environment:
+      FLASK_PROCESS: bronze_api
+      RUN_MIGRATIONS: "0"
+      FLASK_SQLALCHEMY_DATABASE_URI: >-
+        postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}
+      FLASK_SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
+      FLASK_JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env}
+      FLASK_MONGO_URI: >-
+        mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    healthcheck: *healthcheck
+    ports:
+      - "5001:5000"
 
   # Suíte de testes. Sob `profiles`, então NÃO sobe junto com `docker compose up`.
   # Uso: docker compose run --rm test
@@ -77,11 +194,25 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     environment:
       FLASK_TEST_DATABASE_URI: >-
         postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}_test
+      # A suíte usa o banco <MONGO_DATABASE>_test do Mongo e o vhost drive-data-test
+      # (que ela cria pela API de gerenciamento): os dados de desenvolvimento ficam intactos.
+      FLASK_TEST_MONGO_URI: >-
+        mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      FLASK_TEST_AMQP_URL: >-
+        amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/drive-data-test
+      FLASK_TEST_AMQP_MANAGEMENT_URL: >-
+        http://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:15672
       FLASK_SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
       FLASK_JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env}
 
 volumes:
   db_data:
+  mongo_data:
+  rabbitmq_data:

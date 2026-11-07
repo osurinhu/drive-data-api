@@ -12,7 +12,9 @@ from flask import g
 from authz import ROLE_PERMISSIONS, Permission, Role
 from ext.api import api
 from http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
+from instrumentation.probes import registered_probes
 from schemas.error_schema import ApiErrorSchema
+from schemas.health_schema import HealthSchema
 from schemas.pagination_schema import PageSchema
 from service.errors import ServiceError
 from service.pagination import Page
@@ -66,12 +68,23 @@ def test_envelope_de_erro_do_codigo_e_do_schema_nao_divergem(app):
     assert chaves | {"errors"} == set(ApiErrorSchema().fields)
 
 
+def test_toda_sonda_registrada_tem_campo_no_schema_do_health(app):
+    """Falhou? Uma extensão registrou uma sonda (`register_probe`) cujo nome não
+    é campo do `HealthSchema`. O schema é a única fonte da saída: o health
+    executaria a sonda e a esconderia da resposta, sem erro nenhum. O perfil da
+    suíte carrega todas as extensões, então todas as sondas estão aqui."""
+    sem_campo = set(registered_probes(app)) - set(HealthSchema().fields)
+
+    assert not sem_campo, sorted(sem_campo)
+
+
 # --- Autorização --------------------------------------------------------------
 
-#: As duas únicas operações que dispensam token. Abrir uma rota é um ato
+#: As únicas operações que dispensam token. Abrir uma rota é um ato
 #: deliberado: acrescente-a aqui, e só então os testes abaixo voltam a passar.
 ROTAS_PUBLICAS = {
     ("GET", "/api/v1/health/"),
+    ("GET", "/api/v1/health/live"),
     ("POST", "/api/v1/auth/token"),
 }
 

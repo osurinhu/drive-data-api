@@ -1,12 +1,14 @@
 ---
 paths:
-  - "app/repository/**/*.py"
+  - "app/repository/sql/**/*.py"
 ---
 
-# Camada de repositório (`app/repository/`)
+# Repositórios SQL (`app/repository/sql/`)
 
-Única camada que monta SQL. **Não pode:** conter regra de negócio nem decidir permissão.
-Base: `app/repository/base_repository.py`. Receitas: 03-como-estender §1.3 e §3.
+Única parte do projeto que monta SQL. **Não pode:** conter regra de negócio nem decidir
+permissão. Base: `app/repository/sql/base_repository.py`. Receitas: 03-como-estender §1.3 e §3.
+A camada tem uma subpasta por tecnologia (02-decisoes, "Um nível de pasta por papel, outro por
+tecnologia"). Estas regras valem só para `sql/`.
 
 - Repositório concreto é uma linha: `class XRepository(BaseRepository[X])` com
   `super().__init__(X)`. O `[X]` faz `get_by_id()` ser tipado como `X | None`.

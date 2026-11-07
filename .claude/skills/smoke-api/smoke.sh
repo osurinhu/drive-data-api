@@ -7,8 +7,11 @@
 #     do banco de desenvolvimento e o `api` que já está rodando ficam intactos.
 #   * O banco descartável entra pela própria interpolação do compose
 #     (POSTGRES_DB=<nome>_smoke): o .env não é lido e nenhum segredo passa por aqui.
-#   * As migrações rodam do zero, pelo entrypoint de verdade: se a aplicação não
-#     sobe num banco vazio, o smoke falha antes da primeira requisição.
+#   * As migrações rodam do zero, pelo entrypoint de verdade (RUN_MIGRATIONS=1: no
+#     compose quem migra é o job `setup`, que o container avulso não usa): se a
+#     aplicação não sobe num banco vazio, o smoke falha antes da primeira requisição.
+#   * O perfil é o do serviço `api` do compose (FLASK_PROCESS=api): o health precisa
+#     mostrar o banco e o RabbitMQ, e não o Mongo, que esse processo não usa.
 #   * Cada requisição leva um X-Request-ID próprio (smoke-<execução>-NN): a falha
 #     vem acompanhada das linhas do log com o mesmo id.
 #   * Um usuário por papel, criado pelo `flask create-user` com senha aleatória.
@@ -26,8 +29,9 @@ Uso (a partir da raiz do repositório):
   bash .claude/skills/smoke-api/smoke.sh
 
 Sobe o código atual num container avulso do `api`, com banco descartável, e
-confere por HTTP: health, OpenAPI, login, CRUD de item, a matriz 401/403/404/409/422
-e o X-Request-ID no header, no envelope de erro e no log de acesso.
+confere por HTTP: health (com o perfil api: banco e RabbitMQ), OpenAPI, login,
+CRUD de item, a matriz 401/403/404/409/422 e o X-Request-ID no header, no
+envelope de erro e no log de acesso.
 
 Saída: 0 = tudo OK; 1 = alguma verificação falhou (ou a aplicação não subiu);
        2 = infraestrutura (Docker parado, build quebrado, banco fora do ar).
@@ -86,8 +90,8 @@ echo ">> build da imagem do api com o código atual..."
 docker compose build -q api >"$tmp/build.log" 2>&1 ||
   falha_infra "o build da imagem do api falhou." "$tmp/build.log"
 
-docker compose up -d --wait db >"$tmp/db.log" 2>&1 ||
-  falha_infra "o banco não subiu." "$tmp/db.log"
+docker compose up -d --wait db rabbitmq >"$tmp/db.log" 2>&1 ||
+  falha_infra "o banco ou o RabbitMQ não subiu." "$tmp/db.log"
 
 nome="$(docker compose exec -T db printenv POSTGRES_DB 2>/dev/null | tr -d '\r')"
 [ -n "$nome" ] || falha_infra "não consegui ler POSTGRES_DB do container db."
@@ -103,7 +107,7 @@ CRIAR_BANCO
 docker rm -f "$container" >/dev/null 2>&1 # sobra de uma execução interrompida
 echo ">> container avulso do api no banco $banco (migrações do zero)..."
 POSTGRES_DB="$banco" docker compose run -d -T --no-deps --name "$container" \
-  --publish 127.0.0.1::5000 api >"$tmp/run.log" 2>&1 ||
+  -e RUN_MIGRATIONS=1 --publish 127.0.0.1::5000 api >"$tmp/run.log" 2>&1 ||
   falha_infra "o docker compose run do api falhou." "$tmp/run.log"
 
 porta="$(docker port "$container" 5000/tcp 2>/dev/null | head -n 1)"
@@ -184,6 +188,17 @@ campo() {
 
 echo ">> matriz (cada requisição com X-Request-ID smoke-$execucao-NN)"
 confere 200 "health, público" GET /health/
+
+# O perfil do processo, visto de fora: uma chave por dependência que o api usa.
+total=$((total + 1))
+if [ "$(campo database)" = "ok" ] && [ "$(campo rabbitmq)" = "ok" ] && [ -z "$(campo mongo)" ]; then
+  echo "OK      health do perfil api: database e rabbitmq ok, sem mongo"
+else
+  falhas=$((falhas + 1))
+  echo "FALHOU  health do perfil api: $(head -c 300 "$tmp/corpo")"
+fi
+
+confere 200 "liveness, público" GET /health/live
 confere 200 "spec OpenAPI, público" GET /openapi.json
 confere 401 "sem token" GET /item/
 confere 401 "senha errada" POST /auth/token "" '{"name":"smoke-usuario","password":"errada"}'

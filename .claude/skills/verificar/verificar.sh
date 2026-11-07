@@ -103,7 +103,8 @@ CRIAR_BANCO
     ;;
 esac
 
-# Só o estático dispensa o banco; os outros modos sobem o `db` como dependência.
+# Só o estático dispensa os serviços; os outros modos sobem o `db`, o `mongo` e o
+# `rabbitmq` como dependências do `test` (e esperam os três saudáveis).
 sem_banco=()
 [ "$etapas" = "estatico" ] && sem_banco=(--no-deps)
 

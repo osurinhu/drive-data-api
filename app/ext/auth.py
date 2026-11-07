@@ -17,7 +17,7 @@ from flask_jwt_extended import JWTManager, current_user, verify_jwt_in_request
 
 from authz import Permission, has_permission
 from http_errors import error_response
-from repository.user_repository import UserRepository
+from repository.sql.user_repository import UserRepository
 from service.base_service import ANY_OWNER, OwnerScope
 from service.errors import PermissionDeniedError
 

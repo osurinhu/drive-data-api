@@ -5,13 +5,25 @@ paths:
 
 # Testes (`tests/`)
 
-pytest contra PostgreSQL real, nunca SQLite. Rode com `/verificar testes <args>`. Moldes:
-`tests/test_item.py` (CRUD) e `tests/test_authz.py` (papéis). Receita: 03-como-estender §1.10.
+pytest contra PostgreSQL, MongoDB e RabbitMQ reais, nunca SQLite nem um Mongo ou broker em
+memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda derrubada do
+`test_health.py`. Rode com `/verificar testes <args>`. Moldes: `tests/test_item.py` (CRUD) e
+`tests/test_authz.py` (papéis). Receita: 03-como-estender §1.10.
 
+- A pasta diz a infraestrutura do teste. A raiz usa Postgres e HTTP, `tests/unit/` não usa
+  nenhuma, `tests/mongo/` e `tests/rabbitmq/` usam o serviço do nome, e `tests/e2e/` usa os três.
+  O `conftest.py` de cada pasta anula o `_clean_tables` (quem não usa Postgres) e tem a limpeza
+  autouse da sua infraestrutura. Fixture que serve a mais de uma pasta fica no `conftest.py` da
+  raiz, sem autouse, e não puxa infraestrutura de outra pasta: o `mongo_db` vem de uma aplicação
+  mínima, e não do `app`, que recria as tabelas do Postgres. Nome de arquivo de teste é único na
+  suíte inteira: sem `__init__.py`, o pytest recusa dois `test_x.py`.
 - Fixtures (`tests/conftest.py`): `client`; `login(name, password, role)` → `(user_dict, headers)`;
   `headers` (usuário comum já autenticado); `make_user(...)` → dict; `set_role(nome, papel)` troca o
-  papel sem reemitir o token; `sql_log` (lista do SQL emitido — chame `.clear()` depois do preparo).
-- As tabelas são esvaziadas após cada teste: a ordem não importa, mas não presuma ids.
+  papel sem reemitir o token; `sql_log` (lista do SQL emitido — chame `.clear()` depois do preparo);
+  `mongo_db` (o banco `<MONGO_DATABASE>_test`); `amqp_url`, `amqp_management_url`,
+  `amqp_management` e `amqp_vhost` (o vhost `drive-data-test`, criado pela API de gerenciamento).
+- As tabelas são esvaziadas após cada teste, e em `tests/mongo/` também as coleções: a ordem não
+  importa, mas não presuma ids.
 - O banco de testes nasce de `create_all()`, não das migrações: teste verde não prova que a
   migração existe. Por isso o `/verificar` também roda o `alembic check`.
 - Nome do teste em pt-BR descrevendo o comportamento

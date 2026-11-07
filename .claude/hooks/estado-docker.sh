@@ -47,8 +47,12 @@ printf '%s\n' "$estado" | awk -v versao="$versao" '
     if (!($2 in estado) || $1 ~ /-[0-9]+$/) estado[$2] = s
   }
   END {
-    db = ("db" in estado) ? estado["db"] : "sem container"
-    api = ("api" in estado) ? estado["api"] : "sem container"
-    printf "Docker %s no ar — db: %s; api: %s.\n", versao, db, api
+    n = split("db mongo rabbitmq api bronze-api", servicos, " ")
+    linha = ""
+    for (i = 1; i <= n; i++) {
+      s = servicos[i]
+      linha = linha (i > 1 ? "; " : "") s ": " ((s in estado) ? estado[s] : "sem container")
+    }
+    printf "Docker %s no ar — %s.\n", versao, linha
   }'
 exit 0

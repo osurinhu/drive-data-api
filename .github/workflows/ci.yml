@@ -24,8 +24,44 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # Mesmas imagens do docker-compose.yml, e o mesmo timeout de 20 s nos
+      # healthchecks: as duas CLIs (mongosh e rabbitmq-diagnostics) são pesadas e
+      # passam de 5 s numa máquina carregada.
+      mongo:
+        image: mongo:8.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: root
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval 10s
+          --health-timeout 20s
+          --health-retries 10
+
+      # Sem RABBITMQ_DEFAULT_VHOST: a suíte cria o vhost de testes sozinha, pela API
+      # de gerenciamento. O healthcheck roda como `rabbitmq` pelo mesmo motivo do
+      # docker-compose.yml (o cookie criado pelo root derruba o servidor).
+      rabbitmq:
+        image: rabbitmq:4.4-management
+        env:
+          RABBITMQ_DEFAULT_USER: admin
+          RABBITMQ_DEFAULT_PASS: admin
+        ports:
+          - 5672:5672
+          - 15672:15672
+        options: >-
+          --health-cmd "gosu rabbitmq rabbitmq-diagnostics -q check_port_connectivity"
+          --health-interval 10s
+          --health-timeout 20s
+          --health-retries 12
+
     env:
       FLASK_TEST_DATABASE_URI: postgresql+psycopg://baseapi:baseapi@localhost:5432/baseapi_test
+      FLASK_TEST_MONGO_URI: mongodb://root:root@localhost:27017/?authSource=admin
+      FLASK_TEST_AMQP_URL: amqp://admin:admin@localhost:5672/drive-data-test
+      FLASK_TEST_AMQP_MANAGEMENT_URL: http://admin:admin@localhost:15672
       FLASK_SECRET_KEY: chave-de-ci-sem-nenhum-valor-real-0001
       FLASK_JWT_SECRET_KEY: chave-jwt-de-ci-sem-valor-real-0002
 

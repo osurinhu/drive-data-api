@@ -38,14 +38,16 @@ COPY --chown=appuser:appuser migrations/ /srv/migrations/
 COPY --chown=appuser:appuser docker/ /srv/docker/
 COPY --chown=appuser:appuser settings.toml alembic.ini /srv/
 
-RUN chmod +x /srv/docker/entrypoint.sh
+RUN chmod +x /srv/docker/entrypoint.sh /srv/docker/setup.sh
 
 # Nunca rodar como root.
 USER appuser
 
 EXPOSE 5000
 
-# O entrypoint aplica as migrações antes de subir o servidor.
+# O entrypoint aplica as migrações antes de subir o servidor (RUN_MIGRATIONS=1, o
+# padrão). No compose quem migra é o job `setup`, e os processos sobem com 0.
+# O processo (api, bronze_api, consumer, setup) é escolhido por FLASK_PROCESS.
 ENTRYPOINT ["/srv/docker/entrypoint.sh"]
 # Sem `--workers`: o gunicorn lê WEB_CONCURRENCY do ambiente, então o número de
 # workers é configurável sem reconstruir a imagem.

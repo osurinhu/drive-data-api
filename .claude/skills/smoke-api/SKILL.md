@@ -17,8 +17,10 @@ bash .claude/skills/smoke-api/smoke.sh
 Leva cerca de 30 s. O roteiro:
 
 1. reconstrói a imagem `api` com o código atual (é a mesma do `docker compose up`);
-2. cria o banco `<POSTGRES_DB>_smoke` no container `db` e sobe um container avulso
-   (`base-api-smoke`, porta aleatória em 127.0.0.1) apontado para ele;
+2. sobe o `db` e o `rabbitmq` do compose, cria o banco `<POSTGRES_DB>_smoke` e sobe um
+   container avulso (`base-api-smoke`, porta aleatória em 127.0.0.1) apontado para ele. O
+   container roda no perfil `api` e migra pelo entrypoint (`RUN_MIGRATIONS=1`), sem o job
+   `setup`. O health confere o perfil: `database` e `rabbitmq` ok, sem chave `mongo`;
 3. cria um usuário por papel com `flask create-user` e senha aleatória;
 4. roda a matriz, cada requisição com um `X-Request-ID` próprio (`smoke-<execução>-NN`);
 5. confere que o id volta no header e no envelope de erro e aparece no log de acesso;
@@ -48,7 +50,9 @@ correspondente na mesma mudança.
 ## Deixar a API rodando para uso manual
 
 O smoke não mexe no `api` de desenvolvimento. Se o pedido era subir ou rodar a API, depois do
-smoke verde rode `docker compose up -d --build --wait api`. A imagem já está pronta, então é
-rápido. Indique o Swagger em http://localhost:5000/api/v1/. Para criar um usuário ali:
+smoke verde rode `docker compose up -d --build --wait api bronze-api`. O compose roda antes o
+job `setup`, que migra o banco de desenvolvimento. Indique o Swagger em
+http://localhost:5000/api/v1/ (`api`) e http://localhost:5001/api/v1/ (`bronze-api`). Para
+criar um usuário ali:
 `docker compose exec -T api flask create-user --name <nome> --password <senha> --role <papel>`.
 Peça a senha ao usuário e nunca a grave em arquivo.

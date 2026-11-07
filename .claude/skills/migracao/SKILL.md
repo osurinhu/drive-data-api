@@ -28,8 +28,9 @@ docker compose exec -T api alembic revision --autogenerate --rev-id 000N -m "<de
 ```
 
 Se o `up --wait` falhar, a aplicação não subiu: `docker compose logs --tail 50 api` (quase
-sempre um import quebrado no código novo). O entrypoint aplica as migrações existentes no boot,
-então o banco de desenvolvimento já está em `head` quando o autogenerate roda.
+sempre um import quebrado no código novo; se quem falhou foi o job `setup`, veja
+`docker compose logs setup`). O `api` só sobe depois que o `setup` aplica as migrações
+existentes, então o banco de desenvolvimento já está em `head` quando o autogenerate roda.
 
 O autogenerate **não detecta** (escreva à mão, com `alembic revision --rev-id 000N -m "..."`, sem
 `--autogenerate`):

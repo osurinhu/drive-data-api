@@ -1,10 +1,19 @@
 # Configuração da aplicação (Dynaconf).
 #
 # REGRA: este arquivo é versionado, portanto NÃO contém segredos.
-# Valores sensíveis (SECRET_KEY, JWT_SECRET_KEY, SQLALCHEMY_DATABASE_URI) vêm de
-# variáveis de ambiente com o prefixo FLASK_, carregadas do .env (não versionado).
+# Valores sensíveis (SECRET_KEY, JWT_SECRET_KEY e as URIs do Postgres, do Mongo e do
+# RabbitMQ) vêm de variáveis de ambiente com o prefixo FLASK_, carregadas do .env
+# (não versionado).
 # Ex.: FLASK_JWT_SECRET_KEY no ambiente  ->  app.config["JWT_SECRET_KEY"]
 # Veja .env.example para a lista completa.
+#
+# PERFIS: a mesma imagem roda vários processos (o api, o bronze-api, o consumer e o
+# job setup), e a variável FLASK_PROCESS escolhe a seção deste arquivo que vale
+# para cada um ([api], [bronze_api], [consumer], [setup]). A seção do perfil se
+# sobrepõe ao [default] chave a chave; uma lista declarada no perfil substitui a
+# do [default] por inteiro. Sem FLASK_PROCESS vale só o [default], que carrega
+# tudo: é o perfil do desenvolvimento e da suíte. FLASK_PROCESS com um nome que
+# não é seção daqui reprova a inicialização.
 
 [default]
 
@@ -39,6 +48,36 @@ SQLALCHEMY_DATABASE_URI = ""
 #                  derrube a ociosa e o erro apareça só em produção.
 SQLALCHEMY_ENGINE_OPTIONS = { pool_pre_ping = true, pool_size = 5, max_overflow = 5, pool_recycle = 1800 }
 
+# --- MongoDB (camada bronze) --------------------------------------------------
+# A URI, com usuário e senha, vem de FLASK_MONGO_URI. Sem valor padrão de
+# propósito: o processo que carrega ext.mongo não sobe sem ela.
+MONGO_URI = ""
+MONGO_DATABASE = "drive_data_bronze"
+# Espera máxima por um servidor disponível e pela abertura da conexão. Curta de
+# propósito: com o Mongo fora, a requisição falha logo, em vez de prender o worker
+# do gunicorn até o timeout dele (30 s).
+MONGO_TIMEOUT_SECONDS = 5
+
+# --- RabbitMQ (fila da telemetria) --------------------------------------------
+# A URL, com usuário, senha e vhost, vem de FLASK_AMQP_URL.
+AMQP_URL = ""
+# Prazo de abertura da conexão e de cada operação no socket.
+AMQP_TIMEOUT_SECONDS = 5
+# O broker derruba a conexão que passar dois intervalos sem sinal.
+AMQP_HEARTBEAT_SECONDS = 60
+
+# --- Disponibilidade (/health/) -----------------------------------------------
+# Cada extensão que conecta um serviço registra uma sonda, e o /health/ informa
+# uma chave por dependência carregada no processo. Só a queda de uma dependência
+# listada aqui responde 503 e tira o processo do balanceador; as outras aparecem
+# como "unreachable", com status "degraded" e 200.
+HEALTH_CRITICAL = ["database"]
+# Teto das sondas do Mongo e do RabbitMQ (a do banco usa o pool do SQLAlchemy,
+# como sempre usou). Fica bem abaixo do timeout do healthcheck do api e do
+# bronze-api no compose (5 s): uma dependência não crítica lenta não pode
+# derrubar o health inteiro.
+HEALTH_PROBE_TIMEOUT_SECONDS = 2
+
 # --- Autenticação -------------------------------------------------------------
 # 3600s = 1h. Os projetos de origem usavam 48h, longo demais para um padrão.
 JWT_ACCESS_TOKEN_EXPIRES = 3600
@@ -52,12 +91,19 @@ CORS_ORIGINS = ["*"]
 
 # --- Registro dinâmico de módulos --------------------------------------------
 # Cada item de EXTENSIONS é um módulo que expõe init_app(app). A ordem importa:
-# "ext.api" fica por último porque registra os blueprints, que dependem de todo
-# o resto já estar inicializado.
+# "ext.observability" fica primeiro (o resto já loga com request id) e "ext.api"
+# por último, porque registra os blueprints, que dependem de todo o resto já
+# estar inicializado.
 # "ext.config" NÃO entra aqui — create_app() já o inicializa explicitamente.
+#
+# O [default] carrega a união dos perfis, para que a suíte exercite tudo. Módulo
+# novo entra aqui E no perfil de cada processo que o usa; tests/unit/test_composicao.py
+# reprova se as duas coisas divergirem.
 EXTENSIONS = [
     "ext.observability",
     "ext.database",
+    "ext.mongo",
+    "ext.rabbitmq",
     "ext.container",
     "ext.auth",
     "ext.cors",
@@ -67,9 +113,81 @@ EXTENSIONS = [
 ]
 
 # Cada item é um módulo que expõe um Blueprint chamado `blp`, registrado como
-# filho do blueprint /api/v1. Adicionar uma rota nova = adicionar uma linha aqui.
+# filho do blueprint /api/v1. Rota nova = uma linha aqui e outra no perfil do
+# processo que a serve.
 API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
 ]
+
+
+# =============================================================================
+# Perfis por processo (FLASK_PROCESS). Cada um declara as próprias listas: a
+# extensão ou a rota que não está na lista do processo não é importada, não exige
+# configuração e não aparece no health dele. (Serviços e repositórios ficam todos
+# declarados no ext/container.py, comum aos processos HTTP.)
+# =============================================================================
+
+# Producer: cadastro, login, veículos e o recebimento dos lotes do app. Usa o
+# Postgres e o RabbitMQ; não conhece o Mongo.
+[api]
+EXTENSIONS = [
+    "ext.observability",
+    "ext.database",
+    "ext.rabbitmq",
+    "ext.container",
+    "ext.auth",
+    "ext.cors",
+    "ext.error_handler",
+    "ext.commands",
+    "ext.api",
+]
+API_V1_ROUTES = [
+    "blueprint.restapi.v1.health",
+    "blueprint.restapi.v1.auth",
+    "blueprint.restapi.v1.item",
+]
+# O RabbitMQ fora não tira o processo do balanceador: login e cadastro seguem
+# funcionando, e só o envio de lote responde 503.
+HEALTH_CRITICAL = ["database"]
+
+# API da camada silver: login e leitura do bronze. Usa o Postgres (usuários) e o
+# Mongo; não conhece o RabbitMQ.
+[bronze_api]
+EXTENSIONS = [
+    "ext.observability",
+    "ext.database",
+    "ext.mongo",
+    "ext.container",
+    "ext.auth",
+    "ext.cors",
+    "ext.error_handler",
+    "ext.commands",
+    "ext.api",
+]
+API_V1_ROUTES = [
+    "blueprint.restapi.v1.health",
+    "blueprint.restapi.v1.auth",
+]
+HEALTH_CRITICAL = ["database", "mongo"]
+
+# Consumer: lê a fila e grava no bronze. Sem HTTP, sem Postgres e sem JWT.
+[consumer]
+EXTENSIONS = [
+    "ext.observability",
+    "ext.mongo",
+    "ext.rabbitmq",
+]
+API_V1_ROUTES = []
+# Sem rota, sem /health/: nada aqui é crítico para um health que não existe.
+HEALTH_CRITICAL = []
+
+# Job de preparação (docker/setup.sh): hoje, só as migrações. Elas rodam pelo
+# Alembic, que lê a configuração sem montar a aplicação, então nenhuma extensão
+# além da observabilidade é carregada. As do Mongo e do RabbitMQ entram junto com
+# os comandos de preparação deles (topologia e índices).
+[setup]
+EXTENSIONS = ["ext.observability"]
+API_V1_ROUTES = []
+HEALTH_CRITICAL = []

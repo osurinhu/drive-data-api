@@ -6,7 +6,7 @@ apenas os ganchos que precisam de regra própria.
 """
 
 from domain.models import Item
-from repository.item_repository import ItemRepository
+from repository.sql.item_repository import ItemRepository
 from service.base_service import BaseService
 
 

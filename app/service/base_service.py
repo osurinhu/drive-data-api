@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 
 from domain.base import BaseModel
-from repository.base_repository import BaseRepository
+from repository.sql.base_repository import BaseRepository
 from service.errors import BusinessRuleError, ConflictError, NotFoundError
 from service.pagination import Page
 

@@ -24,11 +24,13 @@ Para entender e estender o projeto, veja **[documentacao/](documentacao/)**:
 | API + documentação | flask-smorest (OpenAPI 3 e Swagger UI automáticos) |
 | ORM | Flask-SQLAlchemy 3.1 / SQLAlchemy 2.x |
 | Banco | PostgreSQL 16 (driver `psycopg` 3) |
+| Camada bronze | MongoDB 8.0 (cliente `pymongo`) |
+| Fila | RabbitMQ 4.4 (cliente `pika`) |
 | Migrações | Alembic |
 | Autenticação | Flask-JWT-Extended |
 | Injeção de dependência | `dependency-injector` |
 | Configuração | Dynaconf (`settings.toml` + variáveis de ambiente) |
-| Testes | pytest (contra PostgreSQL real) |
+| Testes | pytest (contra PostgreSQL, MongoDB e RabbitMQ reais) |
 | Lint / formatação | ruff |
 | Tipos | mypy (camadas de lógica pura) |
 | Execução | Gunicorn em Docker, orquestrado por docker-compose |
@@ -41,16 +43,23 @@ Pré-requisitos: Docker e Docker Compose.
 
 ```bash
 cp .env.example .env
-# edite o .env: troque POSTGRES_PASSWORD, SECRET_KEY e JWT_SECRET_KEY
+# edite o .env: troque POSTGRES_PASSWORD, MONGO_ROOT_PASSWORD, RABBITMQ_ADMIN_PASSWORD,
+# SECRET_KEY e JWT_SECRET_KEY
 # gere cada segredo com (use 32 bytes ou mais):
 #   python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 docker compose up --build
 ```
 
-Isso sobe o PostgreSQL, cria o banco de testes, aplica as migrações e inicia a API. O
-compose falha com mensagem explícita se algum segredo do `.env` estiver faltando — nunca
-sobe com segredo vazio.
+Isso sobe o PostgreSQL (e cria o banco de testes), o MongoDB e o RabbitMQ. Depois roda o job
+`setup`, que aplica as migrações e termina, e só então inicia os dois processos HTTP: o `api`
+(porta 5000) e o `bronze-api` (porta 5001). O compose falha com mensagem explícita se algum
+segredo do `.env` estiver faltando — nunca sobe com segredo vazio.
+
+As senhas entram nas URLs de conexão que o compose monta: use só letras, números, `-` e `_`
+(o `token_urlsafe` já gera assim). As do Postgres, do Mongo e do RabbitMQ valem só na
+primeira subida de cada volume, que é quando o usuário é criado; para trocá-las depois, apague
+o volume do serviço com `docker volume rm` (ver `.env.example`).
 
 Crie o primeiro usuário e experimente:
 
@@ -62,9 +71,17 @@ Os papéis são `leitor` (só leitura), `usuario`, `gerente` e `admin`; o padrã
 Para trocar o papel de alguém depois: `flask set-role --name admin --role gerente` (vale na
 requisição seguinte, mesmo com o token já emitido).
 
-- **Swagger UI:** http://localhost:5000/api/v1/
+- **Swagger UI:** http://localhost:5000/api/v1/ (e http://localhost:5001/api/v1/, o `bronze-api`)
 - **Especificação OpenAPI:** http://localhost:5000/api/v1/openapi.json
-- **Health:** http://localhost:5000/api/v1/health/
+- **Health:** http://localhost:5000/api/v1/health/ (uma chave por dependência do processo) e
+  `/api/v1/health/live` (só o processo)
+- **Painel do RabbitMQ:** http://localhost:15672, com `RABBITMQ_ADMIN_USER` e a senha do `.env`
+
+| Processo | `FLASK_PROCESS` | Porta | Dependências | Sem ela, o `/health/` responde |
+|---|---|---|---|---|
+| `api` | `api` | 5000 | Postgres, RabbitMQ | 503 sem o Postgres; 200 `degraded` sem o RabbitMQ |
+| `bronze-api` | `bronze_api` | 5001 | Postgres, Mongo | 503 sem qualquer um dos dois |
+| `setup` (job) | `setup` | — | Postgres | termina depois de migrar |
 
 ```bash
 # obter um token
@@ -81,9 +98,13 @@ curl http://localhost:5000/api/v1/item/ -H "Authorization: Bearer <token>"
 ```bash
 python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
 pip install -r requirements-dev.txt
-# defina FLASK_SQLALCHEMY_DATABASE_URI no .env apontando para localhost
+# no .env, descomente FLASK_SQLALCHEMY_DATABASE_URI, FLASK_MONGO_URI e FLASK_AMQP_URL
+# (apontam para localhost) e suba as dependências: docker compose up -d db mongo rabbitmq
 cd app && flask run
 ```
+
+Sem `FLASK_PROCESS`, vale o perfil `[default]`, que carrega tudo e por isso pede as três URIs.
+Com `FLASK_PROCESS=api` no `.env`, a aplicação sobe como o processo `api` e nem pede o Mongo.
 
 ---
 
@@ -95,16 +116,18 @@ app/
   http_errors.py          envelope de erro + mapa exceção → HTTP
   request_context.py      id da requisição
   authz.py                papéis, permissões e o mapa entre eles
+  instrumentation/        observação usada por mais de uma extensão (sondas do health)
+  messaging/              RabbitMQ: conexão, sonda e API de gerenciamento
   ext/                    infraestrutura — cada módulo expõe init_app(app)
   domain/                 modelos ORM
-  repository/             acesso a dados — única camada que monta SQL
+  repository/             acesso a dados, uma subpasta por tecnologia (sql/: o único lugar que monta SQL)
   service/                regra de negócio, validação, ownership
   schemas/                contrato de entrada/saída (marshmallow)
   blueprint/restapi/v1/   rotas — uma por recurso
 migrations/               Alembic
-tests/                    pytest
-docker/                   entrypoint e scripts de init do banco
-settings.toml             configuração (sem segredos) + registro de módulos
+tests/                    pytest: a raiz usa Postgres; unit/, mongo/, rabbitmq/ e e2e/ (os três), o que o nome diz
+docker/                   entrypoint, setup.sh (o job de preparação) e, por serviço, os scripts de init
+settings.toml             configuração (sem segredos), registro de módulos e um perfil por processo
 requirements.lock.txt     versões exatas do build (versionado)
 documentacao/             arquitetura, decisões e guias de extensão
 ```
@@ -116,19 +139,26 @@ Detalhamento de cada camada e das regras de dependência:
 
 ## Testes
 
-A suíte roda contra **PostgreSQL de verdade**, não SQLite. O banco `<POSTGRES_DB>_test` é
-criado automaticamente na primeira subida do compose.
+A suíte roda contra **PostgreSQL, MongoDB e RabbitMQ de verdade**, não contra imitações. O
+banco `<POSTGRES_DB>_test` é criado automaticamente na primeira subida do compose. No Mongo a
+suíte usa o banco `<MONGO_DATABASE>_test`, e no RabbitMQ o vhost `drive-data-test`, que ela
+mesma cria. Os dados de desenvolvimento ficam intactos.
 
 ```bash
 # no container (não precisa de Python local)
 docker compose run --rm test
 
-# ou localmente, contra o Postgres do compose
-docker compose up -d db
+# ou localmente, contra os serviços do compose
+docker compose up -d db mongo rabbitmq
 pytest
+pytest tests/unit     # só os testes que não usam serviço nenhum
 ```
 
-As tabelas são esvaziadas depois de cada teste, então a ordem de execução não importa.
+As pastas de `tests/` dizem a infraestrutura que cada teste exige. A raiz usa Postgres e HTTP,
+`unit/` não usa nada, `mongo/` e `rabbitmq/` usam o serviço do nome, e `e2e/` usa os três. Cada
+pasta tem o próprio `conftest.py`. As tabelas são esvaziadas depois de cada teste, assim como as coleções do banco de
+testes do Mongo, então a ordem de execução não importa. Os nomes de arquivo de teste não se
+repetem entre as pastas: sem `__init__.py`, o pytest recusa dois arquivos com o mesmo nome.
 
 ```bash
 ruff check .
@@ -136,8 +166,9 @@ ruff format .
 mypy
 ```
 
-O CI (`.github/workflows/ci.yml`) roda tudo isso em cada push, com um PostgreSQL de
-serviço, e inclui `alembic check` — que reprova se as migrações divergirem dos modelos.
+O CI (`.github/workflows/ci.yml`) roda tudo isso em cada push, com PostgreSQL, MongoDB e
+RabbitMQ de serviço, e inclui `alembic check` — que reprova se as migrações divergirem dos
+modelos.
 
 ---
 
@@ -147,7 +178,7 @@ serviço, e inclui `alembic check` — que reprova se as migrações divergirem 
 # criar uma migração a partir das mudanças nos modelos
 docker compose exec api alembic revision --autogenerate -m "descrição"
 
-# aplicar (o entrypoint do container já faz isso no boot)
+# aplicar (o job `setup` já faz isso a cada `docker compose up`)
 docker compose exec api alembic upgrade head
 
 # voltar uma versão
@@ -161,6 +192,12 @@ O `migrations/env.py` lê a URL do banco da configuração da aplicação — a 
 não é duplicada no `alembic.ini`. Ele carrega **apenas** a configuração, não a aplicação
 inteira: migrar o banco não deve exigir que segredos de JWT e CORS estejam definidos.
 
+Quem migra no compose é o job `setup` (`docker/setup.sh`): ele roda antes dos processos, que
+sobem com `RUN_MIGRATIONS=0` e só depois que ele termina com sucesso. Com dois processos (e
+réplicas) migrando na subida, os dois disputariam o mesmo banco vazio. Fora do compose, o
+entrypoint da imagem continua migrando na subida (`RUN_MIGRATIONS=1` é o padrão), como faz o
+container avulso do `/smoke-api`.
+
 Existe também `flask create-db`, que cria as tabelas direto dos modelos. É atalho de
 desenvolvimento: em qualquer ambiente com dados, use Alembic.
 
@@ -171,6 +208,11 @@ desenvolvimento: em qualquer ambiente com dados, use Alembic.
 `settings.toml` é versionado e **não contém segredos**: só valores padrão não sensíveis e
 as duas listas de registro de módulos (`EXTENSIONS`, `API_V1_ROUTES`).
 
+O arquivo tem um `[default]` e uma seção por processo (`[api]`, `[bronze_api]`, `[consumer]`,
+`[setup]`), o **perfil**. A variável `FLASK_PROCESS` escolhe o perfil, e as chaves dele valem
+sobre as do `[default]`; sem ela, vale só o `[default]`, que carrega tudo (desenvolvimento e
+testes). Um `FLASK_PROCESS` com nome que não é seção do arquivo reprova a subida.
+
 Valores sensíveis vêm de variáveis de ambiente com prefixo `FLASK_`, carregadas do `.env`
 (que está no `.gitignore`):
 
@@ -179,10 +221,14 @@ Valores sensíveis vêm de variáveis de ambiente com prefixo `FLASK_`, carregad
 | `FLASK_SECRET_KEY` | `SECRET_KEY` |
 | `FLASK_JWT_SECRET_KEY` | `JWT_SECRET_KEY` |
 | `FLASK_SQLALCHEMY_DATABASE_URI` | `SQLALCHEMY_DATABASE_URI` |
-| `FLASK_TEST_DATABASE_URI` | `TEST_DATABASE_URI` (usado pela suíte) |
+| `FLASK_MONGO_URI` | `MONGO_URI` (processos com `ext.mongo`) |
+| `FLASK_AMQP_URL` | `AMQP_URL` (processos com `ext.rabbitmq`) |
+| `FLASK_PROCESS` | `PROCESS` (o perfil; não é segredo, mas é por processo) |
+| `FLASK_TEST_DATABASE_URI`, `FLASK_TEST_MONGO_URI`, `FLASK_TEST_AMQP_URL`, `FLASK_TEST_AMQP_MANAGEMENT_URL` | usados pela suíte |
 
 Precedência: variável de ambiente > `.env` > `settings.toml`. A aplicação falha na
-inicialização, com mensagem explícita, se a URI do banco ou a chave JWT estiverem vazias.
+inicialização, com mensagem explícita, se a URI do banco ou a chave JWT estiverem vazias, e
+também a URI do Mongo ou a URL do RabbitMQ, nos processos que os usam.
 
 ### Dependências
 
@@ -212,8 +258,8 @@ workers herdariam os mesmos sockets do pool e corromperiam a comunicação com o
 ## Segurança e observabilidade — o essencial
 
 Autenticação é exigida **por padrão**: o requisito é global no spec OpenAPI e aplicado por
-classe de rota. Rotas públicas abrem mão explicitamente. Hoje só `/auth/token` e `/health/`
-são públicas — e é `ROTAS_PUBLICAS`, em `tests/test_contracts.py`, que guarda essa lista: o
+classe de rota. Rotas públicas abrem mão explicitamente. Hoje só `/auth/token`, `/health/` e
+`/health/live` são públicas — e é `ROTAS_PUBLICAS`, em `tests/test_contracts.py`, que guarda essa lista: o
 CI compara com o que o spec declara aberto, então nenhuma rota fica pública por descuido.
 
 Autorização é por **permissão**, não por papel: cada rota declara a capacidade que exige
@@ -242,10 +288,15 @@ Detalhes e o raciocínio por trás:
 - [ ] Trocar todos os segredos do `.env` e nunca reutilizar os de desenvolvimento.
 - [ ] Restringir `CORS_ORIGINS` no `settings.toml` para os domínios do seu frontend
       (o padrão é `["*"]`, adequado só para desenvolvimento).
-- [ ] Remover do `docker-compose.yml` as duas conveniências de desenvolvimento: o
-      mapeamento da porta `5432` do serviço `db` (existe para a suíte de testes alcançar o
-      banco a partir do host) e o bind mount `./migrations` do serviço `api` (existe para
-      que as revisões geradas dentro do container apareçam no host).
+- [ ] Remover do `docker-compose.yml` as conveniências de desenvolvimento: o mapeamento das
+      portas `5432` do `db`, `27017` do `mongo` e `5672`/`15672` do `rabbitmq` (existem para a
+      suíte e as ferramentas alcançarem os serviços a partir do host), o bind mount
+      `./migrations` do serviço `api` (existe para que as revisões geradas dentro do
+      container apareçam no host) e o limite de cache do Mongo (`--wiredTigerCacheSizeGB`,
+      dimensionado para o Docker Desktop).
+- [ ] Dar a cada processo um usuário próprio, com permissões mínimas, no Mongo e no RabbitMQ.
+      Hoje o `bronze-api` usa o usuário root do Mongo e o `api` usa o administrador do RabbitMQ.
+- [ ] Trocar o Mongo e o RabbitMQ de nó único por replica set e cluster.
 - [ ] Conferir que o build de produção usa `target: runtime` — o estágio `dev` carrega as
       ferramentas de teste e não deve ir para produção.
 - [ ] Rever `JWT_ACCESS_TOKEN_EXPIRES` (padrão: 1 hora) e considerar refresh tokens.
@@ -253,7 +304,13 @@ Detalhes e o raciocínio por trás:
       ponto de partida, não um modelo de permissões pronto — e conferir quem está como
       `admin`: `flask shell` ou `SELECT name, role FROM users WHERE role <> 'usuario';`.
 - [ ] Ajustar `WEB_CONCURRENCY` à CPU disponível e refazer a conta do pool de conexões.
-- [ ] Apontar o readiness/liveness probe do orquestrador para `/api/v1/health/`.
+- [ ] Apontar o readiness probe do orquestrador para `/api/v1/health/` e o liveness probe para
+      `/api/v1/health/live`. O liveness não consulta dependência nenhuma: um banco fora não
+      volta reiniciando o processo.
+- [ ] Não deixar o `/api/v1/health/` aberto na internet: bloqueie-o no proxy reverso ou limite-o
+      à rede interna. Ele é público e, a cada chamada, sonda as dependências (abre uma conexão
+      AMQP e faz ping no Mongo), o que pode prender um worker por até
+      `HEALTH_PROBE_TIMEOUT_SECONDS` por sonda. O `/health/live` não tem esse custo.
 - [ ] Colocar um proxy reverso com TLS na frente, repassando o `X-Request-ID`.
 - [ ] Remover a entidade `Item`, seus schemas, testes e a migração inicial depois que suas
       entidades estiverem no lugar.

@@ -1,5 +1,5 @@
 from domain.models import User
-from repository.base_repository import BaseRepository
+from repository.sql.base_repository import BaseRepository
 
 
 class UserRepository(BaseRepository[User]):

@@ -1,19 +1,22 @@
-"""Sonda de disponibilidade.
+"""Sondas de disponibilidade: prontidão (``/health/``) e vida (``/health/live``).
 
-Alvo do healthcheck do container, do readiness probe e do load balancer. Não
-basta responder 200 pelo processo estar vivo: um processo no ar sem banco não
-serve requisição nenhuma, então a sonda verifica a conexão de verdade.
+``/health/`` é o alvo do healthcheck do container, do readiness probe e do load
+balancer. Não basta o processo estar vivo: ele verifica de verdade cada
+dependência que este processo usa, pelas sondas que as extensões registraram.
+Só a queda de uma dependência crítica (``HEALTH_CRITICAL``, por perfil)
+responde 503.
+
+``/health/live`` não consulta nada. É o liveness probe, que reinicia o processo
+quando falha, e uma dependência fora não volta reiniciando quem depende dela.
 """
 
 from flask import current_app
 from flask.views import MethodView
 from flask_smorest import Blueprint
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 
 from ext.api import PUBLIC
-from ext.database import db
-from schemas.health_schema import HealthSchema
+from instrumentation.probes import registered_probes
+from schemas.health_schema import HealthSchema, LivenessSchema
 
 blp = Blueprint(
     "health",
@@ -27,15 +30,28 @@ blp = Blueprint(
 class Health(MethodView):
     @blp.doc(security=PUBLIC)
     @blp.response(200, HealthSchema)
-    @blp.alt_response(503, schema=HealthSchema, description="Alguma dependência está fora")
+    @blp.alt_response(503, schema=HealthSchema, description="Uma dependência crítica está fora")
     def get(self):
-        """Verifica a aplicação e a conexão com o banco."""
-        try:
-            db.session.execute(text("SELECT 1"))
-        except SQLAlchemyError:
-            # Sessão fica inutilizável após falha — reverter antes de devolver.
-            db.session.rollback()
-            current_app.logger.exception("Health check: banco inacessível")
-            return {"status": "degraded", "database": "unreachable"}, 503
+        """Verifica cada dependência que este processo usa.
 
-        return {"status": "ok", "database": "ok"}
+        Responde 503 só quando cai uma dependência crítica do processo. As outras
+        aparecem como `unreachable`, com `status` `degraded` e 200.
+        """
+        estados = {
+            nome: "ok" if sonda() else "unreachable"
+            for nome, sonda in registered_probes(current_app).items()
+        }
+        fora = {nome for nome, estado in estados.items() if estado != "ok"}
+        criticas = set(current_app.config["HEALTH_CRITICAL"])
+
+        corpo = {"status": "degraded" if fora else "ok", **estados}
+        return corpo, 503 if fora & criticas else 200
+
+
+@blp.route("/live")
+class Liveness(MethodView):
+    @blp.doc(security=PUBLIC)
+    @blp.response(200, LivenessSchema)
+    def get(self):
+        """Confirma que o processo está no ar, sem consultar dependência nenhuma."""
+        return {"status": "ok"}

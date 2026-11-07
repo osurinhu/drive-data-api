@@ -31,6 +31,38 @@ origem.
 [01-arquitetura.md](01-arquitetura.md)). Transformar em pacote instalável resolveria, ao
 preço de reescrever todos os imports.
 
+### Um nível de pasta por papel, outro por tecnologia
+O primeiro nível de pasta é o papel (`repository/`). O segundo nível é a tecnologia
+(`repository/sql/`) e só existe quando o mesmo papel usa mais de uma. Uma pasta também só ganha
+subpasta quando os arquivos dela seguem regras próprias: outra biblioteca, outros imports
+permitidos ou outra regra em `.claude/rules/`. Assim a regra, o mypy e os testes de fronteira
+miram um prefixo de pacote, e um arquivo novo herda a regra da pasta onde nasce. Os repositórios
+da base foram para `repository/sql/` antes de o projeto ganhar um segundo armazenamento, para que
+o SQL não ficasse espalhado entre a raiz e a subpasta.
+**Descartado:** tudo plano, com a tecnologia no nome do arquivo (a regra vira uma lista de nomes
+que precisa ser mantida à mão); um `adapters/` no topo, à moda hexagonal (quebraria os nomes de
+camada da base e as receitas); pastas por processo de deploy (o mesmo módulo serve mais de um
+processo, e a composição já é decidida no `settings.toml`).
+**Custo aceito:** imports um nível mais longos (`from repository.sql.user_repository import ...`).
+
+### Um perfil por processo, escolhido por `FLASK_PROCESS`
+A mesma imagem roda o `api`, o `bronze-api`, o job `setup` e, adiante, o consumer da fila. Cada
+processo tem uma seção no `settings.toml` com as próprias `EXTENSIONS` e `API_V1_ROUTES`. O que
+fica fora da lista não é importado, não exige configuração e não entra no health. Assim a queda
+do Mongo não derruba o `api`, e o consumer sobe sem Postgres e sem chave JWT. O `[default]` é a
+união dos perfis, para que a suíte exercite todos os módulos.
+*Como:* `environments=True` e `env_switcher="FLASK_PROCESS"` no `FlaskDynaconf`. Sem a variável,
+vale só o `[default]`.
+**Rede de segurança:** um `FLASK_PROCESS` que não é seção do arquivo reprova a subida. Sozinho,
+o Dynaconf cairia calado no `[default]`, e o processo subiria com tudo. O
+`tests/unit/test_composicao.py` fixa as fronteiras de cada perfil.
+**Custo aceito:** módulo novo entra em duas listas, a do `[default]` e a do processo que o usa.
+O teste de composição reprova se as duas divergirem.
+**Descartado:** uma imagem ou um repositório por processo, que seria prematuro: a separação que
+importa é a dos imports, e ela é verificada. Também uma variável de ambiente para ligar ou
+desligar cada extensão: a composição ficaria espalhada entre o compose e o código, sem um lugar
+só para revisar.
+
 ### Classes genéricas (`BaseRepository[Item]`)
 O type checker passa a saber que `get_by_id()` devolve `Item | None`. Isso pega camada
 trocada em tempo de análise, não em produção.
@@ -57,6 +89,21 @@ construção a uso e dificulta isolar camadas.
 Tipos mais ricos, índice parcial, `TIMESTAMPTZ` nativo. O acesso é via SQLAlchemy, então a
 troca custa pouco.
 **Descartado:** MySQL (o que os projetos de origem usavam) — foi herança, não escolha.
+
+### pika para o RabbitMQ, PyMongo para o Mongo
+São os clientes de referência de cada serviço e são síncronos, como o Flask. O pika expõe o AMQP
+sem camada por cima. Publisher confirms, ack manual e prefetch são exatamente o que o pipeline
+usa.
+**Descartado:** o kombu, que abstrai o broker e esconde justamente confirms e ack. Também o
+aio-pika e o Motor, assíncronos, sem ganho numa aplicação síncrona. E um ODM sobre o Mongo, como
+o MongoEngine: o bronze guarda o documento cru, e uma camada de modelo só atrapalharia.
+
+### API de gerenciamento do RabbitMQ com a stdlib
+Vhosts e permissões são aplicados pela API HTTP de gerenciamento, com PUTs idempotentes
+(`messaging/management.py`, com `urllib`).
+**Descartado:** o `requests`, que seria uma dependência de runtime nova só para alguns PUTs.
+Também o `rabbitmqadmin` e o `rabbitmqctl`, CLIs que precisariam estar na imagem ou exigiriam
+entrar no container do broker.
 
 ---
 
@@ -244,9 +291,67 @@ antes de chegar à aplicação. O que passa são espaços, pontuação e caracte
 
 ## Operação
 
-### `/health/` verifica o banco, não só o processo
-Processo no ar sem banco não serve requisição nenhuma. A sonda executa `SELECT 1` e
-responde 503 se falhar — é o alvo do healthcheck do container e do probe do orquestrador.
+### `/health/` verifica cada dependência do processo; 503 só para as críticas
+Processo no ar sem as suas dependências não serve requisição nenhuma, então o health verifica
+cada uma de verdade, e não só o processo. Cada extensão que conecta um serviço registra a sua
+sonda (`instrumentation/probes.py`), e o `/health/` executa as do processo:
+`{"status": "ok", "database": "ok", "rabbitmq": "ok"}`. Com alguma fora, o `status` vira
+`degraded`. O HTTP só vira 503 quando a dependência fora está em `HEALTH_CRITICAL`, que é
+definido por perfil: `["database"]` no `api`, `["database", "mongo"]` no `bronze-api`.
+*Por quê:* o 503 tira o processo do balanceador. O `api` sem RabbitMQ ainda serve login e
+cadastro, então o broker aparece no health sem derrubá-lo; o `bronze-api` sem Mongo não serve
+nada. A rota não importa a extensão de serviço externo nenhum e informa exatamente o que o
+processo carregou.
+`/health/live` não consulta nada: é o alvo do liveness probe, que reinicia o processo, e
+reiniciar não traz uma dependência de volta.
+*Prazo:* as sondas do Mongo e do RabbitMQ desistem em `HEALTH_PROBE_TIMEOUT_SECONDS` (2 s),
+abaixo do timeout do healthcheck do compose (5 s). A do banco usa o pool do SQLAlchemy, como
+antes.
+**Rede de segurança:** o `test_contracts.py` reprova sonda registrada sem campo no
+`HealthSchema`. Sem o campo, a chave sumiria da resposta, porque o schema é a única fonte da
+saída. O `test_composicao.py` reprova um `HEALTH_CRITICAL` com dependência que o perfil não
+carrega.
+**Descartado:** o `health.py` importar `ext.mongo` e `ext.rabbitmq`: a rota passaria a exigir
+os dois em todo processo. Também responder 503 com qualquer dependência fora, o que tiraria o
+`api` do ar por causa do broker.
+
+### A sonda do RabbitMQ abre uma conexão nova a cada chamada
+A conexão bloqueante do pika não é segura entre threads e só atende o heartbeat quando é usada.
+Guardada entre chamadas do health, ela ficaria ociosa até o broker derrubá-la. Uma conexão nova
+não guarda estado e prova numa ida só que o broker atende, aceita a credencial e tem o vhost.
+**Custo aceito:** um handshake AMQP por chamada do health, desprezível na frequência de um
+healthcheck. Por isso o `/health/` não pode ficar aberto na internet. Ele é público, e cada
+chamada anônima abriria uma conexão e poderia prender um worker até o prazo das sondas
+(README, "Antes de ir para produção").
+**Descartado:** guardar a conexão e reabrir quando cair. Seria estado compartilhado, e a sonda
+passaria a dizer se a conexão guardada vive, não se o broker atende.
+
+### Cliente do Mongo sem conexão até o primeiro uso, e um novo depois de um fork
+O `MongoClient` não sobrevive a um fork: o pool e as threads de monitoramento ficam no processo
+que o abriu, e o PyMongo recomenda que cada processo tenha o seu. A extensão cria o cliente na
+subida com `connect=False`. Assim o PyMongo valida a URI e as opções, mas não abre conexão nem
+thread e não consulta o DNS até a primeira operação. Se o pid mudou, a extensão cria outro.
+Montar a aplicação não conecta a nada, e um comando da CLI que não usa o Mongo não abre conexão.
+O cliente devolve datas com fuso (`tz_aware=True`), pelo mesmo motivo do `TIMESTAMPTZ`.
+**URI malformada reprova a subida com mensagem própria:** a mensagem do PyMongo pode repetir
+pedaços da senha. Uma senha com `/` sem codificação vira caminho na URI, e o erro cita o
+caminho. O mesmo vale para a URL do RabbitMQ (`messaging/connection.py`).
+**Descartado:** criar o cliente só no primeiro uso, sem nada na subida. Uma URI malformada só
+apareceria na primeira requisição, com a mensagem do PyMongo. Também criar o cliente já
+conectado no `init_app`: funciona com o gunicorn sem `--preload`, que monta a aplicação em cada
+worker, mas quebra em silêncio no dia em que alguém ligar o `--preload`.
+
+### Migrações num job `setup`, não na subida de cada processo
+Com dois processos HTTP, e réplicas deles, migrar na subida faria vários `alembic upgrade`
+disputarem o mesmo banco vazio. O serviço `setup` do compose (`docker/setup.sh`) migra e
+termina. O `api` e o `bronze-api` sobem com `RUN_MIGRATIONS=0` e só depois que o `setup`
+termina com sucesso (`service_completed_successfully`). É também onde entram a topologia do
+RabbitMQ e os índices do Mongo, quando existirem.
+**O padrão do entrypoint continua `RUN_MIGRATIONS=1`:** um container avulso da imagem, como o
+do `/smoke-api`, migra sozinho, como sempre fez.
+**Descartado:** migrar na subida de cada processo com uma trava no banco
+(`pg_advisory_lock`). Resolve a disputa, mas mantém a migração na subida de toda réplica, e uma
+migração demorada atrasaria cada uma.
 
 ### Id de requisição no log **e** no corpo do erro
 Fecha o laço: o cliente relata o `request_id` que recebeu, e você reconstrói o que
@@ -262,6 +367,10 @@ inesperado) seria impossível.
 `requirements.txt` é a lista editada à mão (com faixas); `requirements.lock.txt` congela o
 conjunto exato e **é o que o Docker instala**. Sem lock, o build de amanhã pode puxar uma
 versão diferente da testada hoje.
+*Dependência nova não atualiza as outras:* o comando do cabeçalho do lock instala o lock atual
+junto com o `requirements.txt` antes do `pip freeze`. Só a dependência nova (e o que ela traz)
+entra com versão nova. Para atualizar tudo, tira-se o `-r requirements.lock.txt` do comando, de
+propósito e numa mudança só disso.
 
 ### Workers por `WEB_CONCURRENCY`, não por flag na imagem
 O gunicorn lê a variável nativamente, então ajustar a concorrência não exige reconstruir a
@@ -282,6 +391,27 @@ rodando pytest.
 Índice parcial, `ilike`, `TIMESTAMPTZ` e defaults de servidor se comportam diferente entre
 dialetos — e são exatamente esses detalhes que precisam de cobertura. O banco de testes é
 criado automaticamente na primeira subida do compose.
+O mesmo vale para o Mongo e o RabbitMQ: a suíte usa os serviços reais, mas no banco
+`<MONGO_DATABASE>_test` e no vhost `drive-data-test`, que ela mesma cria pela API de
+gerenciamento. Os dados de desenvolvimento ficam intactos.
+**Rede de segurança:** a limpeza do Mongo entre testes recusa rodar num banco cujo nome não
+termine em `_test`.
+
+### Testes separados pela infraestrutura que exigem
+A raiz de `tests/` usa Postgres e HTTP, `tests/unit/` não usa serviço nenhum, `tests/mongo/` e
+`tests/rabbitmq/` usam o serviço do nome, e `tests/e2e/` usa os três. O `conftest.py` de cada
+pasta prepara só a sua infraestrutura. As pastas que não usam Postgres anulam o `_clean_tables`
+autouse da raiz, e a limpeza do Mongo e o vhost de testes são autouse só nas pastas deles. As
+fixtures compartilhadas ficam no `conftest.py` da raiz, sem autouse. Elas também não puxam outra
+infraestrutura: o `mongo_db` sai de uma aplicação mínima, só com `ext.mongo`. Na raiz, as sondas
+do Mongo e do RabbitMQ do `test_health.py` são dublês; o health com as três de verdade está em
+`tests/e2e/`.
+*Por quê:* um teste de Postgres não depende do Mongo, e um teste unitário não toca em serviço
+nenhum: `/verificar testes tests/unit` mostra em segundos se a lógica pura passa.
+**Custo aceito:** sem `__init__.py` nas pastas, o pytest exige nomes de arquivo únicos na suíte
+inteira; dois `test_writer.py` reprovam a coleta.
+**Descartado:** marcadores (`@pytest.mark.mongo`) numa pasta só. Precisariam ser lembrados em
+cada teste, e as fixtures autouse continuariam valendo para todos.
 
 ### Testes de contrato
 Além dos funcionais, `tests/test_contracts.py` transforma duplicação de conhecimento em
@@ -295,7 +425,8 @@ porque não quebram nada — só silenciam.
 no próprio arquivo. Regressão de performance deixa de ser invisível.
 
 ### mypy restrito às camadas de lógica pura
-Configurado só em `service`, `repository`, `domain` e `schemas`, onde a tipagem é limpa.
+Configurado só em `service`, `repository`, `domain` e `schemas`, onde a tipagem é limpa, e nos
+pacotes neutros `messaging` e `instrumentation`, que não usam esses decorators.
 **Por quê não em tudo:** blueprints e extensões dependem de decorators de
 Flask/smorest/dependency-injector com tipagem imperfeita; incluí-los geraria ruído, e um
 mypy ruidoso é um mypy que se aprende a ignorar. Amplie o escopo conforme as camadas forem

@@ -7,7 +7,7 @@ A emissão do token em si fica na rota, que é quem conhece o protocolo HTTP.
 from werkzeug.security import check_password_hash
 
 from domain.models import User
-from repository.user_repository import UserRepository
+from repository.sql.user_repository import UserRepository
 from service.errors import AuthenticationError
 
 

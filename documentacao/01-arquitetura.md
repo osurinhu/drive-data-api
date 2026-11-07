@@ -24,10 +24,10 @@ listas de caminhos de módulo do `settings.toml` e importa cada uma.
 
 ```mermaid
 flowchart TB
-    AF["create_app()"] --> CFG["ext.config<br/>carrega settings.toml + .env"]
+    AF["create_app()"] --> CFG["ext.config<br/>carrega settings.toml + .env<br/>no perfil de FLASK_PROCESS"]
     CFG --> LOOP["para cada item de EXTENSIONS:<br/>import_module(x).init_app(app)"]
     LOOP --> E1["ext.observability"]
-    LOOP --> E2["ext.database"]
+    LOOP --> E2["ext.database · ext.mongo<br/>ext.rabbitmq"]
     LOOP --> E3["ext.container"]
     LOOP --> E4["ext.auth · ext.cors<br/>ext.error_handler · ext.commands"]
     LOOP --> E5["ext.api"]
@@ -36,6 +36,30 @@ flowchart TB
 
 A consequência prática: **nenhuma funcionalidade nova exige editar `app.py`.** Você cria um
 módulo e acrescenta uma linha na configuração.
+
+### Um perfil por processo
+
+A mesma imagem roda mais de um processo, e cada um carrega só o que usa. A variável
+`FLASK_PROCESS` escolhe uma seção do `settings.toml`, o **perfil**. As chaves do perfil valem
+sobre as do `[default]`, e uma lista declarada no perfil (`EXTENSIONS`, `API_V1_ROUTES`)
+substitui a do `[default]` inteira. A extensão ou a rota que fica fora da lista do processo não
+é importada, não exige configuração e não aparece no health dele. O container liga só as rotas
+do perfil. Os serviços e repositórios, porém, ficam todos declarados no `ext/container.py`,
+comum aos processos HTTP.
+
+| Perfil | Quem roda | Dependências | Rotas |
+|---|---|---|---|
+| `[default]` (sem `FLASK_PROCESS`) | desenvolvimento local e a suíte de testes | todas: é a união dos perfis | todas |
+| `[api]` | serviço `api` do compose: login e as rotas de negócio; é ele que publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item` |
+| `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que lê o bronze (por enquanto, só login) | Postgres e Mongo | `health`, `auth` |
+| `[consumer]` | o consumer da fila, que grava no bronze (ainda sem serviço no compose) | Mongo e RabbitMQ (sem Postgres e sem JWT) | nenhuma |
+| `[setup]` | o job `setup`: migra e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação | nenhuma |
+
+Um `FLASK_PROCESS` que não é seção do `settings.toml` reprova a subida: sozinho, o Dynaconf
+cairia calado no `[default]`. O `tests/unit/test_composicao.py` fixa as fronteiras. Ele exige
+que o `[default]` seja a união dos perfis e que nenhum perfil carregue o que o processo não
+usa. Também monta processos à parte: confere que o consumer não importa SQLAlchemy nem JWT e
+que o `bronze-api` não importa a rota de item.
 
 ---
 
@@ -48,9 +72,14 @@ tempo.
 |---|---|---|---|
 | **Rota** | `app/blueprint/restapi/v1/` | Traduzir HTTP em chamada de serviço. Validar entrada por schema, devolver a saída. | Montar consulta, conter regra de negócio, usar `try/except` para erro de domínio |
 | **Serviço** | `app/service/` | Regra de negócio, validação semântica, ownership, controle de transação. | Tocar no ORM direto, saber o que é HTTP (status, header, request) |
-| **Repositório** | `app/repository/` | Única camada que monta SQL. Traduz intenção em consulta. | Conter regra de negócio ou decidir permissão |
+| **Repositório** | `app/repository/` (uma subpasta por tecnologia; hoje, `sql/`) | Única camada que lê e grava dados: o SQL mora em `repository/sql/`. Traduz intenção em consulta. | Conter regra de negócio ou decidir permissão |
 | **Modelo** | `app/domain/` | Mapear tabela para classe. Colunas e relacionamentos. | Conter comportamento de negócio |
 | **Schema** | `app/schemas/` | Único contrato de entrada e saída da API. Valida e serializa. | Acessar banco |
+
+O primeiro nível de pasta é o papel (a camada). O segundo nível é a tecnologia e só existe
+quando o mesmo papel usa mais de uma (`repository/sql/`). Cada subpasta tem as próprias regras e
+os próprios imports permitidos (ver 02-decisoes, "Um nível de pasta por papel, outro por
+tecnologia").
 
 E a infraestrutura, fora do caminho da requisição:
 
@@ -60,23 +89,34 @@ E a infraestrutura, fora do caminho da requisição:
 | `app/http_errors.py` | Envelope de erro e o mapa exceção → status HTTP. Fica fora de `ext/` porque é usado por duas extensões diferentes; se morasse em uma delas, a outra passaria a depender dela. |
 | `app/request_context.py` | Id da requisição. Módulo folha: não importa nada do projeto, então pode ser usado por qualquer camada sem criar ciclo. |
 | `app/authz.py` | Papéis, permissões e o mapa entre eles. Módulo folha, pelo mesmo motivo: o modelo grava o papel, a extensão decide com ele, a rota declara a permissão que exige e o schema publica as do usuário. |
+| `app/instrumentation/` | Peças de observação usadas por mais de uma extensão. Hoje é o registro das sondas do health (`probes.py`): cada extensão que conecta um serviço registra a sua sonda, e a rota do health executa as registradas. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
+| `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika) e o cliente da API de gerenciamento (`management.py`, só stdlib). Recebe URL e prazos de quem chama e não importa `ext`, `repository` nem `blueprint`. |
 
 ---
 
 ## Regras de dependência
 
 ```
-rota      →  serviço, schema, ext, http_errors
+rota      →  serviço, schema, ext, http_errors, instrumentation (só o health)
 serviço   →  repositório, domínio
 repositório → domínio, ext.database
 domínio   →  (nada do projeto)
 schema    →  (nada do projeto)
+instrumentation, messaging  →  (nada do projeto)
 ```
+
+As extensões são a raiz de composição e importam das camadas o que precisam montar. Duas
+peças novas só são importadas por elas: `instrumentation/`, por qualquer extensão e pela rota
+do health, e `messaging/`, por enquanto só pelo `ext.rabbitmq`.
+
+As sondas do health são a única ressalva ao "SQL só no repositório": o `SELECT 1` de
+`ext/database.py` (e o `ping` de `ext/mongo.py`) verifica a conexão e não lê dado nenhum.
 
 Duas regras que valem a pena memorizar:
 
 1. **Nenhuma extensão importa outra extensão.** Se duas precisam da mesma coisa, essa coisa
-   vira um módulo neutro na raiz de `app/` (foi o caso de `http_errors.py`). A ressalva são
+   vira um módulo neutro na raiz de `app/` (foi o caso de `http_errors.py` e de
+   `instrumentation/`). A ressalva são
    duas peças de que o resto já depende, e que por isso outras extensões podem importar:
    `ext.config`, o carregador que o factory chama antes da lista (dele `ext.api` tira o
    `load_routes`), e `ext.database`, dona do `db` que os repositórios também importam (e que
@@ -98,7 +138,7 @@ Quase todo o CRUD já está escrito. Uma entidade nova herda:
 | Classe | Arquivo | O que já dá de graça |
 |---|---|---|
 | `BaseModel` | `app/domain/base.py` | `id`, `created_at`, `last_update`, `deleted`, convenção de nomes de restrição |
-| `BaseRepository[T]` | `app/repository/base_repository.py` | `get_by_id`, `get_by_filter`, `get_first_by_filter`, `get_page`, `add`, `update`, `soft_delete`, `commit`, `rollback` |
+| `BaseRepository[T]` | `app/repository/sql/base_repository.py` | `get_by_id`, `get_by_filter`, `get_first_by_filter`, `get_page`, `add`, `update`, `soft_delete`, `commit`, `rollback` |
 | `BaseService[T]` | `app/service/base_service.py` | CRUD completo, ownership, exclusão lógica, transação, os ganchos `before_create` / `before_update` / `before_delete` e o `_clean_text` que eles usam para normalizar texto |
 
 O parâmetro de tipo (`BaseRepository[Item]`) é o que faz o type checker saber que
@@ -236,9 +276,16 @@ app/
   http_errors.py             envelope de erro + mapa exceção → HTTP
   request_context.py         id da requisição (módulo folha)
   authz.py                   papéis, permissões e o mapa entre eles (módulo folha)
+  instrumentation/
+    probes.py                registro das sondas do health
+  messaging/                 RabbitMQ
+    connection.py            parâmetros de conexão (pika) + sonda do broker
+    management.py            cliente da API de gerenciamento (vhosts, permissões)
   ext/
-    config.py                Dynaconf + carregador dinâmico de módulos
-    database.py              instância do SQLAlchemy
+    config.py                Dynaconf + perfil do processo + carregador dinâmico de módulos
+    database.py              instância do SQLAlchemy + sonda do banco
+    mongo.py                 cliente do Mongo (sem conexão até o primeiro uso; um por processo) + sonda
+    rabbitmq.py              configuração AMQP validada na subida + sonda
     container.py             container de injeção de dependência
     api.py                   flask-smorest + blueprint /api/v1 + segurança global
     auth.py                  JWT, decorator de permissão, escopo de ownership
@@ -249,10 +296,11 @@ app/
   domain/
     base.py                  BaseModel (campos de controle, convenção de nomes)
     models.py                User, Item
-  repository/
-    base_repository.py       CRUD genérico
-    user_repository.py       uma linha: amarra o modelo
-    item_repository.py
+  repository/                uma subpasta por tecnologia
+    sql/                     SQLAlchemy: a única parte que monta consulta SQL
+      base_repository.py     CRUD genérico
+      user_repository.py     uma linha: amarra o modelo
+      item_repository.py
   service/
     base_service.py          CRUD + ownership + ganchos
     errors.py                exceções de domínio
@@ -267,14 +315,17 @@ app/
     auth_schema.py
     item_schema.py
   blueprint/restapi/v1/
-    health.py                sonda de disponibilidade (pública)
+    health.py                prontidão por dependência e vida (/health/live), públicas
     auth.py                  token e identidade
     item.py                  CRUD da entidade de exemplo
 
 migrations/                  Alembic
-tests/                       pytest
-docker/                      entrypoint e init do banco
-settings.toml                configuração (sem segredos) + as duas listas de módulos
+tests/                       pytest; a raiz usa Postgres e HTTP, unit/ não usa nada, mongo/ e
+                             rabbitmq/ usam o serviço do nome, e e2e/ usa os três
+docker/                      entrypoint.sh, setup.sh (o job de preparação) e uma pasta por
+                             serviço de terceiros (postgres/initdb/)
+settings.toml                configuração (sem segredos), as duas listas de módulos e um perfil
+                             por processo
 requirements.lock.txt        versões exatas do build (versionado)
 ```
 

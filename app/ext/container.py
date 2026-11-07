@@ -8,16 +8,17 @@ permite trocar qualquer peça por um dublê nos testes.
 from dependency_injector import containers, providers
 from flask import Flask
 
-from repository.item_repository import ItemRepository
-from repository.user_repository import UserRepository
+from repository.sql.item_repository import ItemRepository
+from repository.sql.user_repository import UserRepository
 from service.auth_service import AuthService
 from service.item_service import ItemService
 from service.user_service import UserService
 
 
 class Container(containers.DeclarativeContainer):
-    # Pacotes onde os marcadores Provide[...] devem ser resolvidos.
-    wiring_config = containers.WiringConfiguration(packages=["blueprint.restapi.v1"])
+    # Sem `wiring_config`: o wiring importa cada módulo que recebe, e um pacote
+    # inteiro traria para o processo as rotas de outros perfis. O `init_app` liga
+    # só as rotas do perfil.
 
     # --- Repositories ---------------------------------------------------------
     user_repository = providers.Factory(UserRepository)
@@ -30,6 +31,10 @@ class Container(containers.DeclarativeContainer):
 
 
 def init_app(app: Flask) -> None:
+    container = Container()
+    # Resolve os marcadores Provide[...] das rotas que este processo registra
+    # (API_V1_ROUTES do perfil), e só delas.
+    container.wire(modules=list(app.config["API_V1_ROUTES"]))
     # No app, para acesso em comandos CLI e testes
     # (app.container.item_service.override(...)).
-    app.container = Container()
+    app.container = container

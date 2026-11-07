@@ -23,7 +23,8 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 
 1. Rota → serviço → repositório → modelo; a seta nunca aponta para cima.
 2. Estender é aditivo: módulo novo + uma linha em `EXTENSIONS` ou `API_V1_ROUTES` do
-   `settings.toml`. Nunca editar `app/app.py`.
+   `settings.toml`, no `[default]` e no perfil de cada processo que o usa (`FLASK_PROCESS`).
+   Nunca editar `app/app.py`.
 3. Imports a partir de `app/`: `from ext.auth import ...`, nunca `from app.ext...`.
 4. Autorização é declarada: a rota exige **permissão** (nunca papel, nunca `if`). Escopo de dono
    explícito em toda chamada de serviço, sem default. Sem permissão = 403; recurso de outro dono = 404.
@@ -40,6 +41,8 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
   O `/verificar` já reconstrói.
 - O `api` roda a imagem do último build. Mudou modelo? `docker compose up -d --build --wait api`
   antes de `alembic revision --autogenerate` (ver `/migracao`).
+- Serviços: `db`, `mongo`, `rabbitmq`, o job `setup` (migra e termina), `api` (:5000) e
+  `bronze-api` (:5001). O `test` espera os três primeiros saudáveis.
 - `docker compose exec`/`run` sempre com `-T` (o Bash daqui não tem TTY).
 - O Git Bash reescreve `/srv` como `C:/Program Files/Git/srv`: use `MSYS_NO_PATHCONV=1` em
   comando docker com caminho de container.
@@ -68,7 +71,7 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 - `/medir-consultas <operação>` — conta o SQL emitido e detecta N+1 antes de otimizar.
 - Agente `revisor-arquitetura` — revisão independente do diff.
 - Hook `SessionStart` (`.claude/hooks/estado-docker.sh`) — a sessão começa com uma linha sobre o
-  estado do Docker, do `db` e do `api`.
+  estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api` e `bronze-api`.
 
 Mapa da pasta e próximas ondas: `.claude/README.md`. Se uma instrução de `.claude/` se mostrar
 errada ou incompleta, corrija-a na mesma sessão e registre no README.

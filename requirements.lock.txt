@@ -7,8 +7,12 @@
 #
 # Para regenerar depois de alterar o requirements.txt:
 #   docker run --rm -v "${PWD}:/srv" -w /srv python:3.12-slim \
-#     sh -c "pip install -q -r requirements.txt && pip freeze --exclude-editable" \
-#     > requirements.lock.txt
+#     sh -c "pip install -q -r requirements.lock.txt -r requirements.txt && pip freeze --exclude-editable" \
+#     > lock.novo && mv lock.novo requirements.lock.txt
+# Instalar o lock junto mantém as versões já verificadas e só acrescenta o que é
+# novo. Para atualizar tudo dentro das faixas, tire o `-r requirements.lock.txt`.
+# A saída vai para outro arquivo porque o container lê o lock: redirecionar
+# direto para ele o esvaziaria antes da leitura.
 # (e recoloque este cabeçalho)
 
 alembic==1.20.1
@@ -16,6 +20,7 @@ apispec==6.10.1
 blinker==1.9.0
 click==8.5.0
 dependency-injector==4.49.1
+dnspython==2.9.2
 dynaconf==3.2.11
 Flask==3.1.2
 flask-cors==6.0.1
@@ -29,9 +34,11 @@ Mako==1.4.3
 MarkupSafe==3.0.4
 marshmallow==3.26.2
 packaging==26.3
+pika==1.4.4
 psycopg==3.3.8
 psycopg-binary==3.3.8
 PyJWT==2.15.1
+pymongo==4.19.0
 SQLAlchemy==2.1.8
 typing_extensions==4.16.0
 webargs==8.7.1

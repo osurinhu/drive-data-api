@@ -56,8 +56,10 @@ para ler arquivos, use Read, Grep e Glob — nunca `cat`, `head` ou `sed`.
    (onde há `@blp.arguments`, o smorest já documenta o 422).
 7. **Schemas**: campo novo presente no schema de saída; limites iguais ao `String(n)`; Update
    parcial com o validador "ao menos um campo"; nada sensível na saída.
-8. **Registro**: rota nova em `API_V1_ROUTES`; extensão nova em `EXTENSIONS` antes de `ext.api`;
-   repositório e serviço novos no container.
+8. **Registro**: rota nova em `API_V1_ROUTES` e extensão nova em `EXTENSIONS` (antes de
+   `ext.api`), no `[default]` e no perfil de cada processo que as usa (`[api]`, `[bronze_api]`,
+   `[consumer]`, `[setup]`); dependência externa nova com sonda, campo no `HealthSchema` e
+   decisão sobre o `HEALTH_CRITICAL` do perfil; repositório e serviço novos no container.
 9. **Migrações**: toda mudança de modelo tem migração; `server_default` em NOT NULL; unicidade por
    índice parcial; `op.f()` nos nomes; valores escritos à mão; `downgrade` espelhado; nenhuma
    migração antiga editada; numeração sequencial.

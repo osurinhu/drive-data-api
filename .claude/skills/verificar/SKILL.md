@@ -1,6 +1,6 @@
 ---
 name: verificar
-description: Roda o portão de qualidade do projeto dentro do Docker, com as mesmas etapas do CI — ruff check, ruff format --check, mypy, ciclo de migrações Alembic num banco descartável e pytest contra PostgreSQL real. Use depois de qualquer mudança de código e antes de declarar uma tarefa pronta, e sempre que for rodar testes, lint, checagem de tipos ou conferir migrações (no host não há pytest, ruff, mypy nem alembic).
+description: Roda o portão de qualidade do projeto dentro do Docker, com as mesmas etapas do CI — ruff check, ruff format --check, mypy, ciclo de migrações Alembic num banco descartável e pytest contra PostgreSQL, MongoDB e RabbitMQ reais. Use depois de qualquer mudança de código e antes de declarar uma tarefa pronta, e sempre que for rodar testes, lint, checagem de tipos ou conferir migrações (no host não há pytest, ruff, mypy nem alembic).
 argument-hint: "[tudo | estatico | testes <args do pytest> | migracoes | medir]"
 allowed-tools: Bash(bash .claude/skills/verificar/verificar.sh *)
 ---
@@ -37,6 +37,12 @@ apaga o banco `<POSTGRES_DB>_mig` pelo próprio container `db`, sem ler o `.env`
 - A última linha é `RESULTADO: OK` ou `RESULTADO: FALHOU — <etapas>`.
 - Código 2 com `INFRA: ...` = Docker parado, build quebrado ou banco fora do ar. Não é falha do
   código: resolva o ambiente (Docker Desktop fechado → peça ao usuário para abrir) e rode de novo.
+- `INFRA` com `dependency failed to start: container ... is unhealthy`: o `test` espera o `db`,
+  o `mongo` e o `rabbitmq` saudáveis, e o compose recusa subir na hora se um estiver
+  `unhealthy`. Veja qual em `docker compose ps`. Se o serviço está de pé
+  (`docker compose logs --tail 20 <serviço>`), foi o healthcheck que estourou o prazo sob
+  carga: ele volta sozinho no ciclo seguinte (30 s). Confira com
+  `docker inspect <container> --format '{{json .State.Health}}'` e rode de novo.
 
 ## O que fazer quando uma etapa falha
 

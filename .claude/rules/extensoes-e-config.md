@@ -4,6 +4,7 @@ paths:
   - "app/app.py"
   - "app/http_errors.py"
   - "app/request_context.py"
+  - "app/instrumentation/**/*.py"
   - "settings.toml"
   - ".env.example"
 ---
@@ -13,13 +14,24 @@ paths:
 Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, §8 e §9.
 
 - `app/app.py` não se edita: `create_app()` lê `EXTENSIONS` e `API_V1_ROUTES` do `settings.toml`.
-- Cada módulo de `ext/` expõe **exatamente uma** `init_app(app)` e entra em `EXTENSIONS`. A ordem
-  é a de inicialização: `ext.observability` primeiro (log com request id), `ext.api` por último
-  (registra as rotas). `ext.config` não entra na lista: o factory já o chama.
+- Cada módulo de `ext/` expõe **exatamente uma** `init_app(app)` e entra em `EXTENSIONS` do
+  `[default]` **e** do perfil de cada processo que o usa (`[api]`, `[bronze_api]`, `[consumer]`,
+  `[setup]`); o `tests/unit/test_composicao.py` reprova se o `[default]` deixar de ser a união
+  dos perfis. A ordem é a de inicialização: `ext.observability` primeiro (log com request id),
+  `ext.api` por último (registra as rotas). `ext.config` não entra na lista: o factory já o chama.
+- Extensão que conecta serviço externo registra a sonda do health com `register_probe`
+  (`instrumentation.probes`). A sonda devolve `bool`, nunca levanta exceção, loga o motivo e
+  desiste em `HEALTH_PROBE_TIMEOUT_SECONDS`. O nome dela ganha campo no `HealthSchema` (o
+  `test_contracts.py` reprova se faltar), e ser crítica ou não é decisão por perfil
+  (`HEALTH_CRITICAL`). Cliente com pool ou threads não conecta na subida e é recriado no
+  processo que não o criou, depois de um fork (molde: `ext/mongo.py`, com `connect=False`).
+  Mensagem de configuração inválida nunca repete a URL ou a URI, nem em pedaços: ela leva a
+  senha. Use mensagem fixa com `from None`, porque o erro da biblioteca repete trechos dela.
 - Extensão não importa extensão. A ressalva de 01-arquitetura ("Regras de dependência"):
   `ext.config` (o carregador `load_routes`, usado por `ext.api`) e `ext.database` (a instância
   `db`, usada por repositórios e por `ext.commands`) podem ser importadas. Algo novo que duas
-  extensões precisem vira módulo neutro na raiz de `app/`, como `http_errors.py` — que não é
+  extensões precisem vira módulo neutro na raiz de `app/`, como `instrumentation/` ou o
+  `http_errors.py` — que não é
   folha (importa `service.errors`) e é usado só por extensões e rotas. `authz.py` e
   `request_context.py` são folhas.
 - `ERROR_STATUS` (`http_errors.py`) é o único mapa exceção → status; `STATUS_DESCRIPTION` alimenta
@@ -28,6 +40,13 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
   `FLASK_*`, documentada em `.env.example` com valor de exemplo, nunca real. Leitura:
   `app.config[...]` no `init_app`, `current_app.config[...]` na requisição. Se for obrigatória,
   falhe na inicialização com mensagem explícita, como `ext/database.py` e `ext/auth.py`.
+- Valor diferente por processo: repita a chave na seção do perfil (03-como-estender §9). Uma
+  lista no perfil substitui a do `[default]` inteira. Perfil sem rota declara
+  `HEALTH_CRITICAL = []`: herdado, o `["database"]` do `[default]` reprovaria no
+  `test_composicao.py`. `FLASK_PROCESS` escolhe o perfil, e um nome que não é seção
+  reprova a subida. Na suíte, nunca monte a aplicação de outro perfil (o `api` e o `v1` de
+  `ext.api` são globais): leia a configuração com `build_config()` ou suba um processo à parte,
+  como no `test_composicao.py`.
 - Constante validada por schema (ex.: limites de paginação) fica com o schema, não na configuração.
 - Comando CLI (`ext/commands.py`): `@click.command` + `@with_appcontext`; serviços saem de
   `current_app.container.x_service()` (o comando não toca repositório nem sessão); erro de domínio

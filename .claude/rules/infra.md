@@ -15,8 +15,21 @@ paths:
 
 Decisões em 02-decisoes, seções Operação e Qualidade; o runbook é o `README.md`.
 
-- O serviço `api` do compose precisa de `target: runtime`: sem ele o Docker constrói o último
-  estágio (`dev`) e a aplicação sobe rodando pytest.
+- Os serviços que rodam a imagem da aplicação (`setup`, `api`, `bronze-api`) herdam o
+  `x-runtime` do compose, que fixa `target: runtime`: sem ele o Docker constrói o último estágio
+  (`dev`) e a aplicação sobe rodando pytest.
+- Quem migra no compose é o job `setup` (`docker/setup.sh`). Processo novo do compose leva
+  `<<: *runtime`, `FLASK_PROCESS`, `RUN_MIGRATIONS: "0"` e `depends_on` do `setup` com
+  `service_completed_successfully`. O padrão do entrypoint continua `RUN_MIGRATIONS=1`, para o
+  container avulso (o do `/smoke-api`) migrar sozinho.
+- RabbitMQ: o `hostname` é fixo porque o nó (`rabbit@<hostname>`) é a chave dos dados no volume.
+  O healthcheck roda como `gosu rabbitmq ...`, no compose e no CI. Como root, o CLI cria um
+  `.erlang.cookie` do root na primeira subida do volume, e o servidor cai com `eacces`.
+- Healthcheck que sobe uma CLI pesada (`mongosh`, `rabbitmq-diagnostics`) usa `timeout` de 20 s,
+  no compose e no CI. Com 5 s, ele estourava durante um build, e o `test` recusava subir com a
+  dependência `unhealthy`. No compose, também `interval` de 30 s e `start_interval` curto.
+- As senhas do `.env` entram nas URLs que o compose monta: só `token_urlsafe` (letras, números,
+  `-` e `_`). Postgres, Mongo e RabbitMQ criam o usuário só na primeira subida do volume.
 - O estágio `runtime` usa `COPY` explícito (só o que roda); o `dev` acrescenta testes e
   ferramentas. `tests/` não pode entrar no `.dockerignore`.
 - Dependência nova: edite `requirements.txt` (faixa de versão) e regenere `requirements.lock.txt`
@@ -31,5 +44,6 @@ Decisões em 02-decisoes, seções Operação e Qualidade; o runbook é o `READM
   `workers × (pool_size + max_overflow) ≤ max_connections`. Nada de `--preload` sem descartar o
   engine no `post_fork`.
 - Scripts `.sh` ficam em LF (`.gitattributes`): com CRLF, o `entrypoint.sh` derruba o container.
-- A porta 5432 do `db` e o bind mount de `./migrations` no `api` são conveniências de
-  desenvolvimento e saem antes de produção (README, "Antes de ir para produção").
+- As portas do `db` (5432), do `mongo` (27017) e do `rabbitmq` (5672 e 15672), o bind mount de
+  `./migrations` no `api` e o limite de cache do Mongo são conveniências de desenvolvimento e
+  saem antes de produção (README, "Antes de ir para produção").
