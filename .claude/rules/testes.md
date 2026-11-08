@@ -43,6 +43,10 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
   contrato) mora em `tests/data/`.
 - As tabelas são esvaziadas após cada teste, e em `tests/mongo/` e `tests/e2e/` também as
   coleções: a ordem não importa, mas não presuma ids.
+- O usuário do RabbitMQ é do broker, e não do vhost: teste que cria usuário usa nome próprio
+  (`teste_acl_producer`, `teste_setup_producer`), senão troca a senha dos processos de
+  desenvolvimento. Os do Mongo moram no banco de teste e saem com `dropAllUsersFromDatabase`,
+  depois de conferir que o nome do banco termina em `_test`.
 - Fixture nunca deixa um contexto de aplicação aberto que o teste não pediu: o `with_appcontext`
   da CLI reaproveita o contexto que encontra, e o comando rodaria contra a aplicação errada. O
   contexto que os adaptadores de `repository/mongo/` exigem é aberto pelo conftest de

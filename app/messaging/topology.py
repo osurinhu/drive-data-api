@@ -14,9 +14,14 @@ fila.
 Mensagem morta é a que o consumer recusou por estar fora do contrato, ou a que
 passou do limite de entregas sem ser gravada. Ela vai para o ``telemetry.dlx`` e
 dele para a DLQ, que não tem consumidor: é fila de ação operacional.
+
+Cada processo tem o seu usuário, com o mínimo que usa. O producer só escreve no
+exchange do contrato, e o consumer só lê a fila principal. A mensagem que ele recusa
+chega à DLQ pelo próprio broker, sem precisar de permissão de escrita.
 """
 
 import re
+from dataclasses import dataclass
 
 from domain.contracts.telemetry_batch import EXCHANGE, ROUTING_KEY
 from messaging.management import ManagementApi
@@ -30,6 +35,25 @@ DEAD_LETTER_QUEUE = "bronze.telemetry.dlq"
 POLICY = "bronze-telemetry"
 #: A policy da DLQ.
 DEAD_LETTER_POLICY = "bronze-telemetry-dlq"
+
+#: Na permissão do RabbitMQ, a expressão que não casa com nenhum recurso.
+_NOTHING = "^$"
+PRODUCER_PERMISSIONS = {
+    "configure": _NOTHING,
+    "write": f"^{re.escape(EXCHANGE)}$",
+    "read": _NOTHING,
+}
+CONSUMER_PERMISSIONS = {
+    "configure": _NOTHING,
+    "write": _NOTHING,
+    "read": f"^{re.escape(QUEUE)}$",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerUser:
+    name: str
+    password: str
 
 
 def apply(api: ManagementApi, vhost: str, *, delivery_limit: int, max_bytes: int) -> None:
@@ -71,3 +95,16 @@ def apply(api: ManagementApi, vhost: str, *, delivery_limit: int, max_bytes: int
         pattern=f"^{re.escape(DEAD_LETTER_QUEUE)}$",
         definition={"delivery-limit": -1},
     )
+
+
+def apply_users(
+    api: ManagementApi, vhost: str, *, producer: BrokerUser, consumer: BrokerUser
+) -> None:
+    """Cria os usuários dos processos, ou troca a senha dos que já existem, e define as
+    permissões de cada um no vhost."""
+    for user, permissions in (
+        (producer, PRODUCER_PERMISSIONS),
+        (consumer, CONSUMER_PERMISSIONS),
+    ):
+        api.put_user(user.name, user.password)
+        api.grant(vhost, user.name, **permissions)

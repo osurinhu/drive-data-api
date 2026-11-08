@@ -26,4 +26,7 @@ faz `auth_schema.py`, e `domain.vin`), nunca o ORM (`domain.models`). Molde: `ap
 - Representação HTTP de um valor do domínio (o cursor opaco da silver ↔ `BronzePosition`) é um
   campo do marshmallow no schema (`CursorField`, em `bronze_schema.py`): o serviço recebe e
   devolve o valor do domínio, e a mensagem do erro não explica o formato (o cursor é opaco).
+- O `raw` do envio aceita campo desconhecido, e o que vai para o bronze precisa voltar igual:
+  `_guardavel` (`telemetry_schema.py`) recusa o que o BSON ou o JSON da resposta não devolvem.
+  Campo livre novo a caminho do bronze passa por ele (02-decisoes, "O formato do lote é estrito").
 - O mypy cobre esta camada.

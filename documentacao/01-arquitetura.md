@@ -61,7 +61,7 @@ grafo do lado HTTP.
 | `[api]` | serviço `api` do compose: cadastro, login, as rotas de negócio e o recebimento dos lotes de telemetria, que ele publica na fila | Postgres e RabbitMQ | `health`, `auth`, `registration`, `vehicle`, `vehicle_driver`, `telemetry` |
 | `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que faz login e lê o bronze por cursor (`GET /bronze/records`) | Postgres e Mongo | `health`, `auth`, `bronze` |
 | `[consumer]` | serviço `consumer` do compose (`flask consumer run`): consome a fila `bronze.telemetry` e grava cada registro no bronze | Mongo e RabbitMQ (sem Postgres e sem JWT) | nenhuma |
-| `[setup]` | o job `setup`: migra, aplica a topologia do RabbitMQ e os índices do bronze e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação; RabbitMQ, pela API de gerenciamento (`flask rabbitmq setup`); Mongo (`flask mongo setup`) | nenhuma |
+| `[setup]` | o job `setup`: migra, aplica a topologia do RabbitMQ, os índices do bronze e os usuários de cada processo e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação; RabbitMQ, pela API de gerenciamento (`flask rabbitmq setup`); Mongo (`flask mongo setup`) | nenhuma |
 
 Um `FLASK_PROCESS` que não é seção do `settings.toml` reprova a subida: sozinho, o Dynaconf
 cairia calado no `[default]`. O `tests/unit/test_composicao.py` fixa as fronteiras. Ele exige
@@ -148,9 +148,9 @@ Duas regras que valem a pena memorizar:
    `load_routes`), `ext.database`, dona do `db` que os repositórios SQL também importam (e
    que `ext.commands` usa), e `ext.mongo`, dona do cliente que os adaptadores de
    `repository/mongo/` importam (`mongo.db`). O `ext.mongo`, por sua vez, importa
-   `repository.mongo.indexes` para o `flask mongo setup`: a dependência corre nos dois
-   sentidos e fica sem ciclo porque o `indexes.py`, e o `bronze_document.py` que ele usa, não
-   importam `ext`. Mantenha assim.
+   `repository.mongo.indexes` e `repository.mongo.users` para o `flask mongo setup`: a
+   dependência corre nos dois sentidos e fica sem ciclo porque esses dois, e o
+   `bronze_document.py` que o `indexes.py` usa, não importam `ext`. Mantenha assim.
 2. **A seta nunca aponta para cima.** Serviço não importa rota, repositório não importa
    serviço. Se você sentir essa necessidade, a lógica está na camada errada.
 
@@ -352,8 +352,10 @@ app/
     consumer_health.py       servidor de saúde do consumer (/health/live, /health/ready e /metrics)
   messaging/                 RabbitMQ
     connection.py            parâmetros de conexão (pika) + sonda do broker
-    management.py            cliente da API de gerenciamento (vhosts, permissões, filas, policies)
-    topology.py              exchanges, fila, DLX, DLQ, bindings e a policy (aplicados pelo setup)
+    management.py            cliente da API de gerenciamento (vhosts, usuários, permissões,
+                             filas, policies)
+    topology.py              exchanges, fila, DLX, DLQ, bindings, a policy e o usuário de cada
+                             processo (aplicados pelo setup)
     publisher.py             publicação dos lotes com confirmação (porta TelemetryPublisher)
     consumer.py              consumo da fila: prefetch, ack manual, DLQ, pausa e reconexão com backoff
     dead_letters.py          listar e republicar a DLQ (comandos de operação)
@@ -361,7 +363,7 @@ app/
     config.py                Dynaconf + perfil do processo + carregador dinâmico de módulos
     database.py              instância do SQLAlchemy + sonda do banco
     mongo.py                 cliente do Mongo (sem conexão até o primeiro uso; um por processo)
-                             + sonda + `flask mongo setup` (os índices do bronze)
+                             + sonda + `flask mongo setup` (índices, retenção e usuários)
     rabbitmq.py              configuração AMQP validada na subida + sonda + `flask rabbitmq`
                              (`setup`, `dlq-list`, `dlq-requeue`)
     container.py             container de injeção de dependência dos processos HTTP
@@ -404,7 +406,9 @@ app/
       rejection_log.py       telemetry_rejections: o que o consumer recusou (porta RejectionLog)
       bronze_reader.py       leitura em ordem de gravação, depois de uma posição e dentro dos
                              filtros (porta BronzeReader) + hora do servidor
-      indexes.py             os índices do bronze e das recusas (aplicados pelo setup)
+      indexes.py             os índices do bronze e das recusas e a retenção de cada coleção
+                             (aplicados pelo setup)
+      users.py               os usuários do bronze, um por processo (aplicados pelo setup)
   service/
     base_service.py          CRUD + ownership + ganchos
     errors.py                exceções de domínio

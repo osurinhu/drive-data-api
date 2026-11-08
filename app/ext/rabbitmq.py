@@ -26,8 +26,8 @@ def setup_command() -> None:
     """Aplica a topologia da telemetria no vhost da AMQP_URL (idempotente).
 
     Cria, ou mantém como estão, o vhost, os exchanges, a fila, a DLQ e os bindings,
-    e aplica a policy da fila, pela API de gerenciamento (AMQP_MANAGEMENT_URL). É o
-    que o job `setup` roda.
+    aplica a policy da fila e os usuários do producer e do consumer, pela API de
+    gerenciamento (AMQP_MANAGEMENT_URL). É o que o job `setup` roda.
     """
     management_url = str(current_app.config.get("AMQP_MANAGEMENT_URL") or "")
     if not management_url:
@@ -40,8 +40,10 @@ def setup_command() -> None:
         api = ManagementApi(management_url, timeout=timeout)
     except ValueError as error:
         raise click.ClickException(f"AMQP_MANAGEMENT_URL inválida: {error}.") from None
+    producer = _process_user("AMQP_PRODUCER_USER", "AMQP_PRODUCER_PASSWORD")
+    consumer = _process_user("AMQP_CONSUMER_USER", "AMQP_CONSUMER_PASSWORD")
 
-    # Do mesmo endereço saem o vhost e o usuário dos processos.
+    # Do mesmo endereço saem o vhost e o usuário de operação.
     amqp = _operation_parameters("setup")
     vhost, user = amqp.virtual_host, amqp.credentials.username
     try:
@@ -51,8 +53,9 @@ def setup_command() -> None:
             delivery_limit=int(current_app.config["AMQP_DELIVERY_LIMIT"]),
             max_bytes=int(current_app.config["AMQP_QUEUE_MAX_BYTES"]),
         )
-        # Por enquanto o usuário da AMQP_URL recebe tudo no vhost. Os usuários por
-        # processo, cada um com o mínimo, chegam com a segurança operacional.
+        topology.apply_users(api, vhost, producer=producer, consumer=consumer)
+        # O usuário de operação (o do job setup e dos comandos da DLQ) recebe tudo no
+        # vhost, que pode ter acabado de nascer.
         api.grant(vhost, user, configure=".*", write=".*", read=".*")
     except ManagementApiError as error:
         raise click.ClickException(str(error)) from error
@@ -89,6 +92,17 @@ def dlq_requeue_command(limit: int) -> None:
     except DeadLettersFailed as error:
         raise click.ClickException(f"a republicação parou: {error}") from error
     click.echo(f"{requeued} mensagem(ns) republicada(s).")
+
+
+def _process_user(user_key: str, password_key: str) -> topology.BrokerUser:
+    """O usuário de um processo, com a senha obrigatória: o `setup` não cria usuário sem ela."""
+    password = str(current_app.config.get(password_key) or "")
+    if not password:
+        raise click.ClickException(
+            f"{password_key} não definida. Preencha FLASK_{password_key}, ou rode via "
+            "docker compose, no serviço setup."
+        )
+    return topology.BrokerUser(str(current_app.config[user_key]), password)
 
 
 def _operation_parameters(name: str) -> AmqpParameters:

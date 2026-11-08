@@ -19,7 +19,8 @@ Leva cerca de 40 s. O roteiro:
 1. reconstrói as imagens `api` e `setup` com o código atual (as mesmas do `docker compose up`);
 2. sobe o `db` e o `rabbitmq` do compose e aplica a topologia num vhost descartável
    (`drive-data-smoke`) com o `flask rabbitmq setup` de verdade, no serviço `setup`
-   (`RABBITMQ_VHOST`, uma interpolação do compose);
+   (`RABBITMQ_VHOST`, uma interpolação do compose). É ali que nasce a permissão do
+   `drive_producer` nesse vhost: o usuário é do broker, com a senha do `.env`;
 3. cria o banco `<POSTGRES_DB>_smoke` e sobe um container avulso (`base-api-smoke`, porta
    aleatória em 127.0.0.1) apontado para ele e para o vhost. O container roda no perfil `api` e
    migra pelo entrypoint (`RUN_MIGRATIONS=1`), sem o job `setup`. O health confere o perfil:

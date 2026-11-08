@@ -539,3 +539,19 @@ sugestão que restava, um contrato para o método de escrita sem `@permission_re
   (`observabilidade.py`). Desvio do plano: o alerta do carimbo usa o p99, porque histograma não
   guarda o máximo. Sugestões do `revisor-arquitetura` aplicadas (o docstring do servidor de saúde
   e o teste da fronteira). `/verificar tudo` com 607 testes.
+- 2026-11-08 — **Fase 7 do pipeline (segurança operacional).** Um usuário por processo no RabbitMQ
+  (`apply_users`, com ACL por regex) e no Mongo (`repository/mongo/users.py`), aplicados pelo job
+  `setup`; a credencial de administração ficou só nele e no `test`. Retenção configurável com
+  `collMod` (0 apaga o índice), `CORS_ORIGINS = []`, checklist de produção e as quatro regras do
+  pipeline revistas contra o código (`servicos-telemetria.md` e `repositorios-mongo.md` estavam
+  defasadas). Desvio do plano: os usuários do Mongo nascem no `setup`, e não em
+  `docker/mongo/initdb/`, que só roda com o volume vazio e não troca senha. O `/security-review`
+  não rodou (o repositório não tem `origin/HEAD`, e o passo inicial dele é
+  `git diff origin/HEAD...`), e a revisão foi feita à mão. Ela achou que o `raw` deixava passar
+  valor que quebrava depois: `{"$ref":…,"$id":…}` travava a página da silver com 500, e `NaN`,
+  inteiro acima de 64 bits, chave com nulo, surrogate e data extrema iam para JSON inválido, DLQ
+  ou 500. O `_guardavel` do `telemetry_schema.py` responde 422. `/verificar tudo` com 669 testes
+  antes dos últimos 5 casos de `test_bronze_reader.py`, que passaram no arquivo, e o `estatico`
+  depois deles. `/smoke-api` verde no estado final. `/smoke-pipeline` verde antes do `_guardavel`;
+  a repetição foi encerrada por falta de memória, com 33 verificações OK e nenhuma falha, antes do
+  caos.

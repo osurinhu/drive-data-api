@@ -10,8 +10,9 @@ from uuid import uuid4
 import pytest
 
 from domain.contracts.telemetry_batch import decode
-from repository.mongo import indexes
-from repository.mongo.bronze_document import RECORDS
+from messaging import connection
+from repository.mongo import indexes, users
+from repository.mongo.bronze_document import RECORDS, REJECTIONS
 
 URL = "/api/v1/telemetry/batches"
 MEU = "93YBSR7RHEJ298116"
@@ -80,26 +81,111 @@ def test_o_lote_aceito_vira_documento_no_bronze_e_o_reenvio_nao_duplica(
     assert bronze_queue() == []
 
 
+#: O usuário do RabbitMQ é do broker, e não do vhost: com os nomes de verdade, a suíte
+#: trocaria a senha dos processos do ambiente de desenvolvimento.
+PRODUTOR = "teste_setup_producer"
+SENHA_DO_PRODUTOR = "senha-do-producer-nos-testes"
+
+
 @pytest.fixture
-def cli(app):
+def cli(app, monkeypatch):
+    for chave, valor in {
+        "AMQP_PRODUCER_USER": PRODUTOR,
+        "AMQP_PRODUCER_PASSWORD": SENHA_DO_PRODUTOR,
+        "AMQP_CONSUMER_USER": "teste_setup_consumer",
+        "AMQP_CONSUMER_PASSWORD": "senha-do-consumer-nos-testes",
+        "MONGO_WRITER_PASSWORD": "senha-do-writer-nos-testes",
+        "MONGO_READER_PASSWORD": "senha-do-reader-nos-testes",
+    }.items():
+        monkeypatch.setitem(app.config, chave, valor)
     return app.test_cli_runner()
 
 
-def test_o_comando_mongo_setup_cria_os_indices_do_bronze(cli, mongo_db):
+@pytest.fixture
+def _sem_usuarios_no_fim(mongo_db):
+    yield
+    assert mongo_db.name.endswith("_test"), mongo_db.name
+    mongo_db.command("dropAllUsersFromDatabase")
+
+
+@pytest.mark.usefixtures("_sem_usuarios_no_fim")
+def test_o_comando_mongo_setup_cria_os_indices_e_os_usuarios(cli, mongo_db):
     resultado = cli.invoke(args=["mongo", "setup"])
 
     assert resultado.exit_code == 0, resultado.output
     assert indexes.INGESTED in resultado.output
     assert indexes.INGESTED in mongo_db[RECORDS].index_information()
+    for usuario, papel in ((users.WRITER, "readWrite"), (users.READER, "read")):
+        [achado] = mongo_db.command("usersInfo", usuario)["users"]
+        assert achado["roles"] == [{"role": papel, "db": mongo_db.name}]
 
 
-def test_o_comando_de_setup_aplica_a_topologia(app, cli, amqp_management_url, monkeypatch):
+@pytest.mark.usefixtures("_sem_usuarios_no_fim")
+def test_o_comando_mongo_setup_aplica_a_retencao_do_settings(app, cli, mongo_db, monkeypatch):
+    monkeypatch.setitem(app.config, "BRONZE_RETENTION_DAYS", 2)
+    monkeypatch.setitem(app.config, "REJECTIONS_RETENTION_DAYS", 1)
+
+    resultado = cli.invoke(args=["mongo", "setup"])
+
+    assert resultado.exit_code == 0, resultado.output
+    bronze = mongo_db[RECORDS].index_information()[indexes.RECORD_TTL]
+    recusas = mongo_db[REJECTIONS].index_information()[indexes.REJECTION_TTL]
+    assert bronze["expireAfterSeconds"] == 2 * 24 * 60 * 60
+    assert recusas["expireAfterSeconds"] == 24 * 60 * 60
+
+
+def test_o_comando_mongo_setup_recusa_retencao_negativa(app, cli, mongo_db, monkeypatch):
+    monkeypatch.setitem(app.config, "BRONZE_RETENTION_DAYS", -1)
+
+    resultado = cli.invoke(args=["mongo", "setup"])
+
+    assert resultado.exit_code != 0
+    assert "negativa" in resultado.output
+    assert mongo_db.list_collection_names() == []
+
+
+@pytest.mark.parametrize("chave", ["MONGO_WRITER_PASSWORD", "MONGO_READER_PASSWORD"])
+def test_o_comando_mongo_setup_exige_as_senhas(app, cli, mongo_db, monkeypatch, chave):
+    monkeypatch.setitem(app.config, chave, "")
+
+    resultado = cli.invoke(args=["mongo", "setup"])
+
+    assert resultado.exit_code != 0
+    assert f"{chave} não definida" in resultado.output
+    assert mongo_db.list_collection_names() == []
+
+
+def test_o_comando_de_setup_aplica_a_topologia_e_cria_os_usuarios(
+    app, cli, amqp_url, amqp_management_url, monkeypatch
+):
     monkeypatch.setitem(app.config, "AMQP_MANAGEMENT_URL", amqp_management_url)
 
     resultado = cli.invoke(args=["rabbitmq", "setup"])
 
     assert resultado.exit_code == 0, resultado.output
     assert "drive-data-test" in resultado.output
+    endereco = amqp_url.rpartition("@")[2]
+    assert connection.broker_reachable(
+        connection.connection_parameters(
+            f"amqp://{PRODUTOR}:{SENHA_DO_PRODUTOR}@{endereco}",
+            timeout=5,
+            heartbeat=60,
+            connection_name="pytest:setup",
+        )
+    )
+
+
+@pytest.mark.parametrize("chave", ["AMQP_PRODUCER_PASSWORD", "AMQP_CONSUMER_PASSWORD"])
+def test_o_comando_de_setup_exige_as_senhas_dos_processos(
+    app, cli, amqp_management_url, monkeypatch, chave
+):
+    monkeypatch.setitem(app.config, "AMQP_MANAGEMENT_URL", amqp_management_url)
+    monkeypatch.setitem(app.config, chave, "")
+
+    resultado = cli.invoke(args=["rabbitmq", "setup"])
+
+    assert resultado.exit_code != 0
+    assert f"{chave} não definida" in resultado.output
 
 
 def test_o_comando_de_setup_exige_a_url_de_gerenciamento(app, cli, monkeypatch):

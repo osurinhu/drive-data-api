@@ -7,11 +7,13 @@ inteiro, em ``tests/e2e/``.
 
 from uuid import UUID, uuid4
 
+import bson
 import pytest
 from dependency_injector import providers
 
 from domain.authz import Role
 from messaging.publisher import RabbitTelemetryPublisher
+from schemas.telemetry_schema import PROFUNDIDADE_DO_BRUTO
 
 URL = "/api/v1/telemetry/batches"
 MEU = "93YBSR7RHEJ298116"
@@ -276,4 +278,77 @@ def test_corpo_acima_do_limite_responde_413(client, headers, fila):
 
     assert response.status_code == 413
     assert response.get_json()["code"] == 413
+    assert fila.publicados == []
+
+
+def _aninhado(niveis: int) -> dict:
+    valor: dict = {}
+    for _ in range(niveis - 1):
+        valor = {"n": valor}
+    return valor
+
+
+@pytest.mark.parametrize(
+    "valor",
+    [
+        pytest.param({"$ref": "a", "$id": 1}, id="DBRef, que o PyMongo devolve como outro tipo"),
+        pytest.param({"$set": 1}, id="campo iniciado por cifrão"),
+        pytest.param({"a\x00b": 1}, id="campo com caractere nulo"),
+        pytest.param({"\ud800": 1}, id="campo fora do UTF-8"),
+        pytest.param("\ud800", id="texto fora do UTF-8"),
+        pytest.param(float("nan"), id="NaN, que sai como JSON inválido"),
+        pytest.param(float("inf"), id="infinito"),
+        pytest.param(2**63, id="inteiro acima de 64 bits"),
+        pytest.param(-(2**63) - 1, id="inteiro abaixo de 64 bits"),
+        pytest.param([{"$ref": "a", "$id": 1}], id="dentro de uma lista"),
+        pytest.param(_aninhado(PROFUNDIDADE_DO_BRUTO), id="aninhado demais"),
+    ],
+)
+def test_o_bruto_que_o_bronze_nao_devolve_igual_reprova_o_lote(client, login, fila, valor):
+    """Passaria pelo 202 e quebraria depois: na página da silver, ou na gravação."""
+    _, headers = login("joao")
+    _cadastrar(client, headers)
+
+    response = client.post(URL, json={"records": [_registro(campo_do_app=valor)]}, headers=headers)
+
+    assert response.status_code == 422, response.get_json()
+    assert fila.publicados == []
+
+
+@pytest.mark.parametrize(
+    "valor",
+    [
+        pytest.param(2**63 - 1, id="o maior inteiro de 64 bits"),
+        pytest.param(-(2**63), id="o menor inteiro de 64 bits"),
+        pytest.param({"a.b": 1}, id="campo com ponto"),
+        pytest.param("$ref", id="cifrão no valor"),
+        pytest.param("a\x00b", id="caractere nulo no valor"),
+        pytest.param("ação 🚗", id="texto fora do ASCII"),
+        pytest.param(_aninhado(PROFUNDIDADE_DO_BRUTO - 1), id="no limite do aninhamento"),
+    ],
+)
+def test_o_bruto_aceito_volta_igual_do_bson(client, login, fila, valor):
+    _, headers = login("joao")
+    _cadastrar(client, headers)
+    enviado = _registro(campo_do_app=valor)
+
+    response = client.post(URL, json={"records": [enviado]}, headers=headers)
+
+    assert response.status_code == 202, response.get_json()
+    [lote] = fila.publicados
+    [registro] = lote.records
+    assert bson.decode(bson.encode({"raw": registro.raw}))["raw"] == enviado
+
+
+@pytest.mark.parametrize(
+    "data", ["0001-01-01T00:00:00+14:00", "9999-12-31T23:59:59-14:00"], ids=["início", "fim"]
+)
+def test_data_que_nao_cabe_em_utc_reprova_o_lote(client, login, fila, data):
+    _, headers = login("joao")
+    _cadastrar(client, headers)
+    registro = {**_registro(), "collected_at": data}
+
+    response = client.post(URL, json={"records": [registro]}, headers=headers)
+
+    assert response.status_code == 422, response.get_json()
     assert fila.publicados == []

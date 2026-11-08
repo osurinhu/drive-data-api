@@ -14,6 +14,9 @@
 #   * Os usuários (a gestora, o motorista e a silver) nascem pelo `flask create-user`, com senha
 #     aleatória que só passa por variável de ambiente.
 #   * O .env é lido pelo compose, como no `docker compose up`, e nunca impresso.
+#   * Cada processo roda com o usuário dele, criado pelo job `setup` com as senhas
+#     aleatórias geradas aqui: o projeto é descartável, e o smoke prova que o mínimo
+#     de permissão basta para o caminho inteiro.
 
 set -uo pipefail
 
@@ -55,6 +58,12 @@ projeto="smoke-pipeline"
 # O perfil entra aqui para o `down` levar também o Prometheus e o Grafana.
 P=(docker compose -p "$projeto" --profile observabilidade -f docker-compose.yml -f "$pasta/compose.override.yml")
 tmp="$(mktemp -d)"
+
+# Valem sobre as do .env, só neste projeto: nascem e morrem com os volumes dele.
+for variavel in RABBITMQ_PRODUCER_PASSWORD RABBITMQ_CONSUMER_PASSWORD \
+  MONGO_WRITER_PASSWORD MONGO_READER_PASSWORD; do
+  export "$variavel=$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
+done
 
 limpar() {
   # Os volumes e as imagens do projeto vão junto: nada do smoke sobra no Docker.
@@ -137,6 +146,27 @@ if "${P[@]}" logs --no-log-prefix api bronze-api consumer 2>&1 |
 else
   echo "OK      nenhum 5xx nem traceback nos logs do api, do bronze-api e do consumer"
 fi
+
+# A credencial de administração é só do `setup`: cada processo usa o próprio usuário.
+usuario_de() {
+  "${P[@]}" exec -T "$1" python -c \
+    "import os, urllib.parse as u; print(u.urlsplit(os.environ['$2']).username)" 2>/dev/null |
+    tr -d '\r'
+}
+confere_usuario() {
+  local achado
+  achado="$(usuario_de "$1" "$2")"
+  if [ "$achado" = "$3" ]; then
+    echo "OK      $1 usa o usuário $3 em $2"
+  else
+    echo "FALHOU  $1 em $2: usuário '$achado', esperado $3"
+    resultado=1
+  fi
+}
+confere_usuario api FLASK_AMQP_URL drive_producer
+confere_usuario consumer FLASK_AMQP_URL drive_consumer
+confere_usuario consumer FLASK_MONGO_URI bronze_writer
+confere_usuario bronze-api FLASK_MONGO_URI bronze_reader
 
 # O pronto da Fase 6: um grep pelo request_id acha a requisição nos dois processos.
 marca="\"request_id\": \"smoke-pipeline-$execucao\""

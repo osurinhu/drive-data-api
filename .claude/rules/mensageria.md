@@ -54,10 +54,15 @@ destino de cada mensagem" e "Parada e queda".
   de fila é imutável: o que pode mudar (DLX, limites, o teto em bytes) vai pela policy `bronze-telemetry`. O
   `dead-letter-strategy: at-least-once` exige `overflow: reject-publish`; sem ele, o RabbitMQ
   volta ao at-most-once calado.
+- Usuários: `apply_users` (`topology.py`) dá a cada processo só o que ele usa, por regex
+  (`PRODUCER_PERMISSIONS`, `CONSUMER_PERMISSIONS`; `^$` é nada), e o dead-letter é do broker, sem
+  escrita do consumer. Operação nova num adaptador passa nos outros testes, que usam a
+  credencial de operação, e reprova em produção: acrescente o caso em
+  `tests/rabbitmq/test_acl_rabbitmq.py`.
 - Log e mensagem de erro nunca repetem a URL, porque ela leva a senha. O erro do pika vai para o
   log por `describe_error`, já que o `AMQPConnectionError` tem `str()` vazio. A URL que não se
   deixa ler vira mensagem fixa com `from None`: o urllib repete trechos dela.
-- API de gerenciamento: pedidos idempotentes por `_send` (PUT para vhost, permissão, exchange,
+- API de gerenciamento: pedidos idempotentes por `_send` (PUT para vhost, usuário, permissão, exchange,
   fila e policy; POST para o binding, que o RabbitMQ não duplica). Nome de vhost, de usuário, de exchange e
   de fila passa por `_segment` (o vhost padrão se chama `/`). O `ManagementApiError` traz o
   começo da resposta (é ali que vem o "inequivalent arg") e nunca a credencial.

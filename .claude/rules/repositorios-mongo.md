@@ -19,9 +19,9 @@ o bronze por cursor" e "Cliente do Mongo sem conexão até o primeiro uso". Rece
 - O layout do documento mora só em `bronze_document.py` (`to_document`, `from_document`,
   `to_rejection_document`, `sender_of`, o nome das coleções). O serviço monta e recebe um
   `BronzeEntry` e não conhece o BSON; o adaptador não monta nem lê documento à mão.
-- `indexes.py`, `bronze_document.py` e `server.py` não importam `ext`: o `ext.mongo` importa o
-  `indexes` para o `flask mongo setup`, e um import de volta faria o ciclo. Quem precisa do
-  cliente (`bronze_writer.py`, `bronze_reader.py`, `rejection_log.py`) o pede ao `ext.mongo` na
+- `indexes.py`, `users.py`, `bronze_document.py` e `server.py` não importam `ext`: o `ext.mongo`
+  importa o `indexes` e o `users` para o `flask mongo setup`, e um import de volta faria o
+  ciclo. Quem precisa do cliente (`bronze_writer.py`, `bronze_reader.py`, `rejection_log.py`) o pede ao `ext.mongo` na
   hora do uso, nunca no import, e passa o banco ao `server.py`.
 - O `_id` é o `id` do registro, em texto: é o índice único dele que torna a gravação
   idempotente. Ids vão como texto e datas como `datetime` com fuso (o BSON guarda milissegundos).
@@ -49,7 +49,13 @@ o bronze por cursor" e "Cliente do Mongo sem conexão até o primeiro uso". Rece
   (`explain`, sem `SORT`), no molde do `tests/mongo/test_bronze_reader.py`.
 - Índice novo em `indexes.py`, com nome explícito (`ix_<campos>`), aplicado pelo
   `flask mongo setup`. Mudar a definição de um índice existente reprova: outro nome, e o antigo
-  sai numa mudança à parte.
+  sai numa mudança à parte. A exceção é o prazo do TTL, que é configuração: o `_apply_ttl` o
+  ajusta com `collMod`. Prazo 0 apaga o índice, porque `expireAfterSeconds: 0` expira tudo na
+  hora.
+- Usuários em `users.py`: um por processo, com o menor papel embutido que serve (`readWrite` no
+  consumer, `read` no bronze-api), no próprio banco do bronze. Escrita nova no `bronze_reader.py`
+  passa nos testes da pasta, que usam root, e reprova em produção: acrescente o caso em
+  `tests/mongo/test_usuarios_mongo.py`.
 - Testes contra o Mongo de verdade em `tests/mongo/` (banco `<MONGO_DATABASE>_test`, limpo a
   cada teste; o conftest da pasta abre o contexto de aplicação que o `mongo.db` exige e dá o
   `mongo_avulso`, um Mongo em outro endereço, para a falha da infraestrutura). A ida e a volta

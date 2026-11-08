@@ -44,7 +44,8 @@ Pré-requisitos: Docker e Docker Compose.
 ```bash
 cp .env.example .env
 # edite o .env: troque POSTGRES_PASSWORD, MONGO_ROOT_PASSWORD, RABBITMQ_ADMIN_PASSWORD,
-# SECRET_KEY e JWT_SECRET_KEY
+# SECRET_KEY e JWT_SECRET_KEY, e preencha as senhas dos processos: RABBITMQ_PRODUCER_PASSWORD,
+# RABBITMQ_CONSUMER_PASSWORD, MONGO_WRITER_PASSWORD e MONGO_READER_PASSWORD
 # gere cada segredo com (use 32 bytes ou mais):
 #   python -c "import secrets; print(secrets.token_urlsafe(32))"
 
@@ -54,15 +55,16 @@ docker compose up --build
 Isso sobe o PostgreSQL (e cria o banco de testes), o MongoDB e o RabbitMQ. Depois roda o job
 `setup`, que aplica as migrações, a topologia do RabbitMQ (os exchanges `telemetry` e
 `telemetry.dlx`, a fila `bronze.telemetry`, a DLQ `bronze.telemetry.dlq` e a policy que liga
-as duas) e os índices do bronze, e termina. Só então inicia os dois processos HTTP, o `api`
+as duas), os índices do bronze e o usuário de cada processo, e termina. Só então inicia os dois processos HTTP, o `api`
 (porta 5000) e o `bronze-api` (porta 5001), e o `consumer`, que grava no bronze o que chega na
 fila. O compose falha com mensagem explícita se algum segredo do `.env` estiver faltando —
 nunca sobe com segredo vazio.
 
 As senhas entram nas URLs de conexão que o compose monta: use só letras, números, `-` e `_`
-(o `token_urlsafe` já gera assim). As do Postgres, do Mongo e do RabbitMQ valem só na
-primeira subida de cada volume, que é quando o usuário é criado; para trocá-las depois, apague
-o volume do serviço com `docker volume rm` (ver `.env.example`).
+(o `token_urlsafe` já gera assim). As de administração do Postgres, do Mongo e do RabbitMQ
+valem só na primeira subida de cada volume, que é quando o usuário é criado; para trocá-las
+depois, apague o volume do serviço com `docker volume rm` (ver `.env.example`). As dos usuários
+por processo o job `setup` reaplica a cada subida: basta trocar no `.env`.
 
 Crie o primeiro usuário e experimente:
 
@@ -212,8 +214,9 @@ consulta do `mongosh` acima, com `db.telemetry_rejections.find()`).
 ```bash
 python -m venv .venv && .venv/Scripts/activate   # Linux/macOS: source .venv/bin/activate
 pip install -r requirements-dev.txt
-# no .env, descomente FLASK_SQLALCHEMY_DATABASE_URI, FLASK_MONGO_URI, FLASK_AMQP_URL e
-# FLASK_AMQP_MANAGEMENT_URL (apontam para localhost) e suba as dependências:
+# no .env, descomente FLASK_SQLALCHEMY_DATABASE_URI, FLASK_MONGO_URI, FLASK_AMQP_URL,
+# FLASK_AMQP_MANAGEMENT_URL (apontam para localhost) e as quatro senhas dos processos, que os
+# comandos de setup aplicam, e suba as dependências:
 # docker compose up -d db mongo rabbitmq
 alembic upgrade head                          # o banco, na raiz do repositório
 cd app && flask rabbitmq setup && flask mongo setup   # a topologia da fila e os índices do bronze
@@ -341,6 +344,8 @@ Valores sensíveis vêm de variáveis de ambiente com prefixo `FLASK_`, carregad
 | `FLASK_MONGO_URI` | `MONGO_URI` (processos com `ext.mongo`) |
 | `FLASK_AMQP_URL` | `AMQP_URL` (processos com `ext.rabbitmq`) |
 | `FLASK_AMQP_MANAGEMENT_URL` | `AMQP_MANAGEMENT_URL` (só o `setup`, para o `flask rabbitmq setup`) |
+| `FLASK_AMQP_PRODUCER_PASSWORD`, `FLASK_AMQP_CONSUMER_PASSWORD` | as senhas que o `flask rabbitmq setup` aplica aos usuários dos processos (só o `setup`) |
+| `FLASK_MONGO_WRITER_PASSWORD`, `FLASK_MONGO_READER_PASSWORD` | as senhas que o `flask mongo setup` aplica aos usuários do bronze (só o `setup`) |
 | `FLASK_PROCESS` | `PROCESS` (o perfil; não é segredo, mas é por processo) |
 | `FLASK_TEST_DATABASE_URI`, `FLASK_TEST_MONGO_URI`, `FLASK_TEST_AMQP_URL`, `FLASK_TEST_AMQP_MANAGEMENT_URL` | usados pela suíte |
 
@@ -431,16 +436,27 @@ Detalhes e o raciocínio por trás:
 - [ ] Antes de aplicar a migração 0006, conferir as contas que mudam de papel:
       `SELECT name, role FROM users WHERE role IN ('leitor', 'gerente')`. Elas viram `usuario`:
       o `leitor` passa a escrever nos próprios veículos e o `gerente` deixa de ler os de todos.
-- [ ] Restringir `CORS_ORIGINS` no `settings.toml` para os domínios do seu frontend
-      (o padrão é `["*"]`, adequado só para desenvolvimento).
+- [ ] Manter `CORS_ORIGINS = []` no `settings.toml` enquanto só o app mobile e a silver usarem
+      a API. Um frontend web entra com os domínios dele, nunca com `*`.
 - [ ] Remover do `docker-compose.yml` as conveniências de desenvolvimento: o mapeamento das
       portas `5432` do `db`, `27017` do `mongo` e `5672`/`15672` do `rabbitmq` (existem para a
       suíte e as ferramentas alcançarem os serviços a partir do host), o bind mount
       `./migrations` do serviço `api` (existe para que as revisões geradas dentro do
       container apareçam no host) e o limite de cache do Mongo (`--wiredTigerCacheSizeGB`,
       dimensionado para o Docker Desktop).
-- [ ] Dar a cada processo um usuário próprio, com permissões mínimas, no Mongo e no RabbitMQ.
-      Hoje o `bronze-api` usa o usuário root do Mongo e o `api` usa o administrador do RabbitMQ.
+- [ ] Confirmar o prazo de retenção do bronze (`BRONZE_RETENTION_DAYS`, 365 dias) com o jurídico,
+      à luz da LGPD, e decidir o que acontece com os dados de uma conta excluída. Reduzir o
+      prazo apaga de verdade na passada seguinte do TTL, e 0 desliga a retenção.
+- [ ] Ligar TLS no AMQP, na API de gerenciamento e no Mongo (`amqps://`, `https://` e
+      `tls=true`) assim que eles saírem da rede interna do compose: as senhas dos processos e o
+      dado bruto passam por ali.
+- [ ] Limitar a taxa no proxy reverso, ao menos em `/auth/token`, `/auth/register` e
+      `/telemetry/batches`: a aplicação não tem rate limit, e o cadastro é público.
+- [ ] Deixar o `bronze-api` só na rede interna, tirando o `5001:5000` do `docker-compose.yml`: quem
+      o usa é a silver, e o dado bruto sai por ali.
+- [ ] Definir a rotina de troca das senhas dos processos: mude a senha no `.env` e rode
+      `docker compose up -d`. O job `setup` a aplica no broker e no Mongo, e os processos
+      são recriados com a nova.
 - [ ] Trocar o Mongo e o RabbitMQ de nó único por replica set e cluster.
 - [ ] Conferir que o build de produção usa `target: runtime` — o estágio `dev` carrega as
       ferramentas de teste e não deve ir para produção.

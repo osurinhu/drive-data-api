@@ -82,7 +82,7 @@ services:
     restart: unless-stopped
     environment:
       # Usuário de administração e vhost da aplicação, criados na primeira subida
-      # do volume. Os usuários por processo, com permissões mínimas, vêm depois.
+      # do volume. Os usuários por processo, com o mínimo, quem cria é o job setup.
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_ADMIN_USER:-admin}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_ADMIN_PASSWORD:?defina RABBITMQ_ADMIN_PASSWORD no .env}
       RABBITMQ_DEFAULT_VHOST: drive-data
@@ -109,8 +109,9 @@ services:
   # Job de preparação (docker/setup.sh): migra o banco, aplica a topologia do
   # RabbitMQ e os índices do bronze, e termina. Os processos só sobem depois que ele
   # termina com sucesso — com dois processos migrando no boot, os dois disputariam
-  # o mesmo banco vazio. É o único que recebe a credencial da API de gerenciamento
-  # do RabbitMQ.
+  # o mesmo banco vazio. É o único com a credencial de administração do RabbitMQ e do
+  # Mongo; com ela, cria os usuários dos outros processos a cada subida, e trocar uma
+  # senha no .env basta para trocá-la no serviço.
   setup:
     <<: *runtime
     restart: "no"
@@ -131,6 +132,10 @@ services:
         amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
       FLASK_AMQP_MANAGEMENT_URL: >-
         http://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:15672
+      FLASK_AMQP_PRODUCER_PASSWORD: ${RABBITMQ_PRODUCER_PASSWORD:?defina RABBITMQ_PRODUCER_PASSWORD no .env}
+      FLASK_AMQP_CONSUMER_PASSWORD: ${RABBITMQ_CONSUMER_PASSWORD:?defina RABBITMQ_CONSUMER_PASSWORD no .env}
+      FLASK_MONGO_WRITER_PASSWORD: ${MONGO_WRITER_PASSWORD:?defina MONGO_WRITER_PASSWORD no .env}
+      FLASK_MONGO_READER_PASSWORD: ${MONGO_READER_PASSWORD:?defina MONGO_READER_PASSWORD no .env}
     entrypoint: ["/srv/docker/setup.sh"]
 
   # Producer: cadastro, login, veículos e o recebimento dos lotes do app.
@@ -152,7 +157,7 @@ services:
       FLASK_SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
       FLASK_JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env}
       FLASK_AMQP_URL: >-
-        amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
+        amqp://drive_producer:${RABBITMQ_PRODUCER_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
       # Lido nativamente pelo gunicorn. Ao aumentar, refaça a conta do pool de
       # conexões documentada no settings.toml.
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
@@ -193,8 +198,10 @@ services:
         postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}
       FLASK_SECRET_KEY: ${SECRET_KEY:?defina SECRET_KEY no .env}
       FLASK_JWT_SECRET_KEY: ${JWT_SECRET_KEY:?defina JWT_SECRET_KEY no .env}
+      # O authSource é o banco do bronze (MONGO_DATABASE, no settings.toml): é nele que o
+      # job setup cria o usuário. Mudou o nome lá, mude aqui.
       FLASK_MONGO_URI: >-
-        mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+        mongodb://bronze_reader:${MONGO_READER_PASSWORD}@mongo:27017/?authSource=drive_data_bronze
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
     healthcheck: *healthcheck
     ports:
@@ -215,10 +222,12 @@ services:
     environment:
       FLASK_PROCESS: consumer
       RUN_MIGRATIONS: "0"
+      # O authSource é o banco do bronze (MONGO_DATABASE, no settings.toml): é nele que o
+      # job setup cria o usuário. Mudou o nome lá, mude aqui.
       FLASK_MONGO_URI: >-
-        mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+        mongodb://bronze_writer:${MONGO_WRITER_PASSWORD}@mongo:27017/?authSource=drive_data_bronze
       FLASK_AMQP_URL: >-
-        amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
+        amqp://drive_consumer:${RABBITMQ_CONSUMER_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
     command: ["flask", "consumer", "run"]
     healthcheck:
       # Pronto: conectado, consumindo e com o Mongo respondendo. Sem o Mongo ou o

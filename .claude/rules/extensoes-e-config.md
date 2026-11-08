@@ -30,7 +30,7 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
   `ext.config` (o carregador `load_routes`, usado por `ext.api`), `ext.database` (a instância
   `db`, usada por repositórios e por `ext.commands`) e `ext.mongo` (o cliente, usado pelos
   adaptadores de `repository/mongo/`) podem ser importadas. O `ext.mongo` importa de volta só o
-  `repository.mongo.indexes`, que não importa `ext`. Algo novo que duas
+  `repository.mongo.indexes` e o `repository.mongo.users`, que não importam `ext`. Algo novo que duas
   extensões precisem vira módulo neutro fora de `ext/`, como `instrumentation/` (que guarda o
   `correlation.py`) ou o `blueprint/http_errors.py` — que não é folha (importa
   `service.errors`) e é usado só por extensões e rotas. Ele nunca importa `ext`, e o

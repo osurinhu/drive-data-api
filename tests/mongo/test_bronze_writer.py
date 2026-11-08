@@ -161,9 +161,9 @@ def test_operacao_fora_do_prazo_vira_bronze_indisponivel(mongo_db):
 
 def test_os_indices_do_bronze_se_aplicam_de_novo_sem_mudar_nada(mongo_db):
     """O setup roda a cada `docker compose up`."""
-    indexes.apply(mongo_db)
+    indexes.apply(mongo_db, bronze_retention_days=365, rejections_retention_days=30)
 
-    nomes = indexes.apply(mongo_db)
+    nomes = indexes.apply(mongo_db, bronze_retention_days=365, rejections_retention_days=30)
 
     existentes = mongo_db[RECORDS].index_information()
     ordem = [("ingestion.ingested_at", 1), ("_id", 1)]

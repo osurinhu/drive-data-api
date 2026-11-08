@@ -543,8 +543,8 @@ def init_app(app: Flask) -> None:
 
 O motivo é o perfil. O job `setup` carrega só o que usa (`[setup]`), e o `ext.commands` traz o
 banco e o container junto. Na extensão, o comando chega a todo processo que conhece aquela
-infraestrutura, e a nenhum outro. A credencial de operação (`AMQP_MANAGEMENT_URL`) é lida só
-dentro do comando: o processo que nunca o roda não precisa dela. Erro da infraestrutura vira
+infraestrutura, e a nenhum outro. A credencial de operação (`AMQP_MANAGEMENT_URL`) e as senhas
+que o comando aplica são lidas só dentro dele: o processo que nunca o roda não precisa delas. Erro da infraestrutura vira
 `click.ClickException` com a mensagem, sem o traceback.
 
 **Processo de longa duração** (o `flask consumer run`) segue o mesmo formato, numa extensão só
@@ -811,9 +811,27 @@ mesmo sem o filtro novo. A silver levaria 422 com o cursor guardado. Por isso o 
 
 O `create_index` é idempotente, mas mudar a definição de um índice que já existe reprova a
 aplicação: o Mongo recusa outro índice com o mesmo nome. Crie o novo com outro nome e apague o
-antigo numa mudança à parte. Índice que a consulta não usa é custo em toda gravação: meça
+antigo numa mudança à parte. A exceção é o prazo de um índice TTL, que é configuração: o
+`_apply_ttl` o ajusta com `collMod` (02-decisoes, "A retenção do bronze"). Índice que a consulta não usa é custo em toda gravação: meça
 antes com o `explain()`. O índice de uma leitura da silver ganha um teste do plano, no molde do
 `test_a_pagina_sai_do_indice_sem_ordenar_em_memoria` (`tests/mongo/test_bronze_reader.py`).
+
+### 12.4 Processo novo no bronze ou na fila
+
+Cada processo tem o próprio usuário, com o mínimo que usa (02-decisoes, "Um usuário por
+processo").
+
+1. O usuário e o papel em `app/repository/mongo/users.py` (Mongo), ou as permissões e o
+   `BrokerUser` em `apply_users`, de `app/messaging/topology.py` (RabbitMQ; `^$` é nada).
+2. A senha: `FLASK_<NOME>_PASSWORD` no serviço `setup` do `docker-compose.yml`, com `:?`, a
+   variável no `.env.example` e a URL do processo novo com o usuário dele.
+3. Os dois lados no teste: o que ele não alcança e o adaptador de verdade funcionando só com
+   aquela credencial (moldes: `tests/rabbitmq/test_acl_rabbitmq.py` e
+   `tests/mongo/test_usuarios_mongo.py`).
+
+Operação nova num adaptador que já existe também passa por aqui: um `queue_declare` no consumer
+ou uma escrita no `bronze_reader` passam nos outros testes, que usam a credencial de operação,
+e reprovam em produção.
 
 ---
 

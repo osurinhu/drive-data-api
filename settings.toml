@@ -79,6 +79,18 @@ BRONZE_READ_TIMEOUT_SECONDS = 5
 # consumer carimbar o registro e a gravação ficar visível passe menos que isto. O custo
 # é a defasagem: a silver vê cada registro uns 30 s depois de ele chegar ao bronze.
 BRONZE_SETTLE_SECONDS = 30
+# Quantos dias o bronze e as recusas ficam guardados, contados da gravação. 0 desliga a
+# retenção. Aplicados pelo `flask mongo setup` (mudar aqui exige rodar o setup de novo);
+# encurtar o prazo apaga o que ficou velho demais. Os 365 dias do bronze ainda precisam
+# de confirmação jurídica (LGPD).
+BRONZE_RETENTION_DAYS = 365
+REJECTIONS_RETENTION_DAYS = 30
+# As senhas dos usuários do bronze (bronze_writer, do consumer, e bronze_reader, da
+# silver), que o `flask mongo setup` aplica. Vêm de FLASK_MONGO_WRITER_PASSWORD e
+# FLASK_MONGO_READER_PASSWORD, e só o job setup as recebe nessa forma: os outros
+# processos têm a própria URI.
+MONGO_WRITER_PASSWORD = ""
+MONGO_READER_PASSWORD = ""
 
 # --- RabbitMQ (fila da telemetria) --------------------------------------------
 # A URL, com usuário, senha e vhost, vem de FLASK_AMQP_URL.
@@ -105,6 +117,14 @@ AMQP_QUEUE_MAX_BYTES = 2147483648
 # o setup a recebe: os processos que publicam ou consomem não têm a credencial de
 # operação.
 AMQP_MANAGEMENT_URL = ""
+# Os usuários do producer e do consumer, que o `flask rabbitmq setup` cria com o mínimo
+# de permissão no vhost. As senhas vêm de FLASK_AMQP_PRODUCER_PASSWORD e
+# FLASK_AMQP_CONSUMER_PASSWORD, e só o job setup as recebe nessa forma: os outros
+# processos têm a própria URL, que precisa usar estes nomes.
+AMQP_PRODUCER_USER = "drive_producer"
+AMQP_CONSUMER_USER = "drive_consumer"
+AMQP_PRODUCER_PASSWORD = ""
+AMQP_CONSUMER_PASSWORD = ""
 
 # --- Consumer -----------------------------------------------------------------
 # A porta do servidor de saúde do consumer (/health/live e /health/ready). Não é
@@ -139,8 +159,9 @@ JWT_ENCODE_ISSUER = "drive-data"
 JWT_DECODE_ISSUER = "drive-data"
 
 # --- CORS ---------------------------------------------------------------------
-# Restrinja para os domínios do seu frontend antes de ir para produção.
-CORS_ORIGINS = ["*"]
+# Nenhuma origem: o app mobile e a silver não são navegadores, e o Swagger da própria API
+# roda na mesma origem. Um frontend web entra aqui, pelo domínio.
+CORS_ORIGINS = []
 
 # Os limites de paginação ficam em app/schemas/pagination_schema.py, junto do
 # schema que os valida — para não haver duas fontes de verdade.

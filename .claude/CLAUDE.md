@@ -45,10 +45,13 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
   O `/verificar` já reconstrói.
 - O `api` roda a imagem do último build. Mudou modelo? `docker compose up -d --build --wait api`
   antes de `alembic revision --autogenerate` (ver `/migracao`).
-- Serviços: `db`, `mongo`, `rabbitmq`, o job `setup` (migra, aplica a topologia e os índices e
-  termina), `api` (:5000), `bronze-api` (:5001) e `consumer` (sem porta publicada: `flask consumer run`).
+- Serviços: `db`, `mongo`, `rabbitmq`, o job `setup` (migra, aplica a topologia, os índices e os
+  usuários de cada processo, e termina), `api` (:5000), `bronze-api` (:5001) e `consumer` (sem porta publicada: `flask consumer run`).
   O `test` espera os três primeiros saudáveis.
 - `docker compose exec`/`run` sempre com `-T` (o Bash daqui não tem TTY).
+- O compose interpola o arquivo inteiro: faltando no `.env` uma senha exigida com `:?`, todo
+  `docker compose` reprova, inclusive o `/verificar`, e a mensagem diz qual falta. Não abra o
+  `.env` para conferir.
 - O Git Bash reescreve `/srv` como `C:/Program Files/Git/srv`: use `MSYS_NO_PATHCONV=1` em
   comando docker com caminho de container.
 - Python no host: `python -X utf8` (o console é cp1252 e quebra com acentos e setas).

@@ -5,6 +5,7 @@ guardou. O contexto de aplicação que os dois exigem (``mongo.db``) vem do conf
 desta pasta.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -24,6 +25,7 @@ from repository.mongo import indexes
 from repository.mongo.bronze_document import RECORDS
 from repository.mongo.bronze_reader import ORDER, MongoBronzeReader, page_query
 from repository.mongo.bronze_writer import MongoBronzeWriter
+from schemas.telemetry_schema import PROFUNDIDADE_DO_BRUTO
 
 #: Milissegundos: a precisão da data BSON.
 T0 = datetime(2026, 11, 7, 14, 0, 0, 482000, tzinfo=UTC)
@@ -102,6 +104,32 @@ def test_le_o_que_o_writer_gravou_campo_a_campo(gravar, reader):
     [registro] = gravar(_registro(T0))
 
     assert _ler(reader) == [registro]
+
+
+def _aninhado(niveis: int) -> dict:
+    valor: dict = {}
+    for _ in range(niveis - 1):
+        valor = {"n": valor}
+    return valor
+
+
+@pytest.mark.parametrize(
+    "valor",
+    [
+        pytest.param(2**63 - 1, id="o maior inteiro de 64 bits"),
+        pytest.param(-(2**63), id="o menor inteiro de 64 bits"),
+        pytest.param({"a.b": 1}, id="campo com ponto"),
+        pytest.param("a\x00b", id="caractere nulo no valor"),
+        pytest.param(_aninhado(PROFUNDIDADE_DO_BRUTO - 1), id="no limite do aninhamento"),
+    ],
+)
+def test_o_bruto_que_o_envio_aceita_volta_igual_do_servidor(gravar, reader, valor):
+    """O outro lado do 422 do envio: o que passa por ele o Mongo guarda e devolve igual."""
+    [registro] = gravar(replace(_registro(T0), raw={"campo_do_app": valor}))
+
+    [lido] = _ler(reader)
+
+    assert lido.raw == registro.raw
 
 
 def test_le_em_ordem_de_gravacao_e_desempata_pelo_id(gravar, reader):
@@ -246,7 +274,7 @@ def _estagios(plano: Any) -> list[dict]:
 def test_a_pagina_sai_do_indice_sem_ordenar_em_memoria(gravar, mongo_db, owner_scope):
     """A ordem da leitura é a do ``ix_ingested``, e o intervalo do cursor é o limite da
     varredura: sem isso, cada página ordenaria a coleção inteira."""
-    indexes.apply(mongo_db)
+    indexes.apply(mongo_db, bronze_retention_days=365, rejections_retention_days=30)
     gravados = gravar(*(_registro(T0 + timedelta(seconds=i)) for i in range(5)))
     consulta = page_query(
         _posicao(gravados[1]), until=DEPOIS_DE_TUDO, owner_scope=owner_scope, filters=NO_FILTERS
@@ -274,7 +302,7 @@ def test_a_pagina_sai_do_indice_sem_ordenar_em_memoria(gravar, mongo_db, owner_s
 def test_a_pagina_filtrada_sai_do_indice_sem_ordenar_em_memoria(gravar, mongo_db, filtros, indice):
     """A ordem é a do índice também com filtro: o ``$in`` de várias métricas é uma junção
     ordenada das faixas (``SORT_MERGE``), e não uma ordenação."""
-    indexes.apply(mongo_db)
+    indexes.apply(mongo_db, bronze_retention_days=365, rejections_retention_days=30)
     # Os procurados ficam espalhados entre os outros: colados, a varredura pela ordem
     # acharia todos em seguida, e seria mesmo a melhor escolha.
     gravar(*(_registro(T0 + timedelta(seconds=i), metricas=("rpm",)) for i in range(60)))

@@ -12,7 +12,8 @@ fork, porque o pool e as threads de monitoramento ficam no processo que o abriu.
 Por isso o processo que não é o que criou o cliente cria o seu (o gunicorn com
 ``--preload``, por exemplo, monta a aplicação antes do fork dos workers).
 
-Também registra o grupo ``flask mongo``, com a operação do bronze (os índices).
+Também registra o grupo ``flask mongo``, com a operação do bronze (os índices, a retenção
+e os usuários por processo).
 """
 
 import logging
@@ -29,7 +30,7 @@ from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
 from instrumentation.probes import register_probe
-from repository.mongo import indexes
+from repository.mongo import indexes, users
 
 logger = logging.getLogger(__name__)
 
@@ -130,19 +131,41 @@ mongo_cli = AppGroup("mongo", help="Operação do MongoDB (o bronze).")
 
 @mongo_cli.command("setup")
 def setup_command() -> None:
-    """Cria, ou mantém como estão, os índices do bronze (idempotente).
+    """Aplica os índices, a retenção e os usuários do bronze (idempotente).
 
-    É o que o job `setup` roda, depois das migrações e da topologia do RabbitMQ.
+    É o que o job `setup` roda, depois das migrações e da topologia do RabbitMQ. A
+    MONGO_URI dele é a de administração; a dos outros processos é a do usuário de cada um.
     """
+    config = current_app.config
+    writer_password = _required_password("MONGO_WRITER_PASSWORD")
+    reader_password = _required_password("MONGO_READER_PASSWORD")
     database = mongo.db
     try:
-        nomes = indexes.apply(database)
+        nomes = indexes.apply(
+            database,
+            bronze_retention_days=int(config["BRONZE_RETENTION_DAYS"]),
+            rejections_retention_days=int(config["REJECTIONS_RETENTION_DAYS"]),
+        )
+        users.apply(database, writer_password=writer_password, reader_password=reader_password)
+    except ValueError as error:
+        raise click.ClickException(str(error)) from None
     except PyMongoError as error:
         # %.300s: a mensagem do pymongo traz a topologia inteira, mas não a senha.
         raise click.ClickException(
             f"o Mongo recusou ou não respondeu ({type(error).__name__}: {str(error):.300})"
         ) from error
     click.echo(f"Índices do bronze aplicados no banco '{database.name}': {', '.join(nomes)}.")
+    click.echo(f"Usuários do bronze aplicados: {users.WRITER}, {users.READER}.")
+
+
+def _required_password(name: str) -> str:
+    password = str(current_app.config.get(name) or "")
+    if not password:
+        raise click.ClickException(
+            f"{name} não definida. Preencha FLASK_{name}, ou rode via docker compose, "
+            "no serviço setup."
+        )
+    return password
 
 
 def init_app(app: Flask) -> None:

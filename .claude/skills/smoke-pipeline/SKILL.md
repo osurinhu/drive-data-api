@@ -37,7 +37,8 @@ um volume novo do RabbitMQ e o job `setup`. O roteiro:
      novo, com o remetente e o vínculo (`driver`) do motorista. É a prova de que o reenvio não
      repetiu nada;
    - a página vazia devolve o cursor recebido, e a releitura do começo tem 4 registros;
-5. confere a fila e a DLQ vazias e nenhum 5xx ou traceback nos logs dos três processos;
+5. confere a fila e a DLQ vazias, nenhum 5xx ou traceback nos logs dos três processos, e que
+   cada processo conecta com o próprio usuário (imprime só o nome, nunca a URL);
 6. roda o caos (`caos.py`, dentro do container do api, uma etapa por estado dos serviços):
    - consumer parado: 600 lotes recebem 202 e acumulam na fila. Ele volta e leva um SIGTERM
      assim que o primeiro lote aparece no log (a linha diz quantos ele gravou antes de parar; se
@@ -53,7 +54,7 @@ um volume novo do RabbitMQ e o job `setup`. O roteiro:
 
 O ambiente de desenvolvimento (projeto `base-api`) não é tocado: nem os containers, nem os
 volumes, nem as imagens. O `.env` é lido pelo compose, como no `docker compose up`, e nunca
-impresso.
+impresso. As senhas dos usuários por processo são aleatórias e valem só nesse projeto.
 
 ## Lendo o resultado
 

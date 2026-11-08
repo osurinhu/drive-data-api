@@ -345,7 +345,8 @@ Os exchanges (`telemetry` e `telemetry.dlx`), as filas (`bronze.telemetry` e a D
 (`messaging/topology.py`) e aplicados pelo `flask rabbitmq setup`, pela API de gerenciamento,
 de forma idempotente. O producer e o consumer só usam a topologia: nenhum dos dois declara
 nada, e nenhum depende de o outro ter subido antes. Só o `setup` recebe a credencial de
-operação (`AMQP_MANAGEMENT_URL`).
+operação (`AMQP_MANAGEMENT_URL`), e a ACL garante o resto: nenhum dos dois tem permissão de
+configurar ("Um usuário por processo", em Segurança).
 As filas são *quorum*, replicadas e duráveis. O tipo não muda depois da criação. O
 comportamento da fila principal vai pela policy `bronze-telemetry`, que muda sem recriar a
 fila: a mensagem morta segue para o `telemetry.dlx` (`dead-letter-exchange`), com
@@ -390,7 +391,8 @@ antigo fica. Sem a distinção, o registro novo sumiria sem rastro, contado como
 **O que não se grava deixa rastro** em `telemetry_rejections`: a colisão e o registro cujo VIN
 não está na forma que o producer publica (a fila é uma fronteira de confiança; o id e a data com
 fuso o contrato já garante). A recusa guarda o motivo, os ids do envelope e o bruto, tem
-retenção de 30 dias (índice TTL) e é gravada antes do ack, com a mesma durabilidade do bronze. O
+retenção própria (`REJECTIONS_RETENTION_DAYS`) e é gravada antes do ack, com a mesma
+durabilidade do bronze. O
 `_id` é `<message_id>:<record_id>`: a reentrega cai no mesmo documento, e o reenvio do lote, que
 é outra mensagem, deixa outro. Um registro ruim não vai para a DLQ, que recebe a mensagem
 inteira e é fila de ação operacional.
@@ -423,6 +425,19 @@ duplicado; tratar a credencial recusada como bug, que mandaria a fila inteira pa
 consumer num servidor que aceita a conexão e não responde, até o broker o derrubar por falta de
 heartbeat (e aí a entrega conta).
 
+### A retenção do bronze é um índice TTL, e o prazo muda com `collMod`
+`BRONZE_RETENTION_DAYS` (365) e `REJECTIONS_RETENTION_DAYS` (30) ficam no `settings.toml`, e o
+`flask mongo setup` os aplica. O prazo é configuração, e não definição do índice: se ele mudou,
+o `collMod` troca o `expireAfterSeconds` sem reconstruir o índice, o que no bronze custaria uma
+varredura da coleção inteira.
+**0 desliga, e desligar apaga o índice.** Para o Mongo, `expireAfterSeconds: 0` quer dizer
+"expira assim que a data passa": o bronze inteiro sumiria na passada seguinte do monitor de TTL.
+Valor negativo reprova o `setup` antes de tocar em qualquer índice.
+**O TTL tem índice próprio** (`ttl_ingested`, só sobre `ingestion.ingested_at`): o Mongo só
+aceita TTL em índice de campo único, e o `ix_ingested` é composto.
+**Reduzir o prazo apaga de verdade**, e não tem volta. Os 365 dias são um padrão técnico: o prazo
+legal (LGPD) ainda precisa de confirmação, e está no checklist do `README.md`.
+
 ### O formato do lote é estrito, e os limites têm dois níveis
 O schema do envio (`schemas/telemetry_schema.py`) não converte: `available` só aceita booleano, e
 `value`, número ou nulo; um `"true"` ou um `"1065.0"` é 422. A leitura indisponível tem `value`
@@ -431,6 +446,15 @@ lote. Campo desconhecido no registro e na leitura é aceito e fica em `raw`; na 
 422.
 **Por quê:** o bronze guarda o bruto como veio. Converter validaria um valor e deixaria outro
 gravado, e a silver receberia o tipo errado.
+**O bruto só entra se o bronze o devolver igual.** Campo desconhecido é livre, mas não qualquer
+valor: o schema recusa, com 422, campo iniciado por `$` ou com caractere nulo, mais de 32 níveis
+de aninhamento, inteiro fora de 64 bits, número não finito e texto fora do UTF-8, e o
+`collected_at` precisa caber em UTC. Cada um desses passaria pelo 202 e quebraria depois. O
+`{"$ref": ..., "$id": ...}` volta do PyMongo como `DBRef`, que não vira JSON: a página da silver
+daria 500 para sempre, porque o cursor não avança, e qualquer `usuario` travaria a leitura de
+todos. `NaN` sairia como JSON inválido, e os demais levariam o lote à DLQ, ou quebrariam a
+publicação. Basta conferir na entrada HTTP: só o producer publica na fila (a ACL), e o consumer
+não precisa repetir a regra.
 **Dois níveis de limite:** as contagens (500 registros, 64 leituras) ficam no schema, com erro
 por campo; o tamanho do corpo fica em `MAX_CONTENT_LENGTH` (1 MiB, 413), porque recusa antes de
 o JSON ser lido. O teto vale para toda rota do processo, o que não custa nada: nenhuma outra
@@ -765,6 +789,44 @@ O `X-Request-ID` recebido é filtrado e truncado em 64 caracteres antes de ir pa
 *(Quebra de linha não é o risco aqui: o protocolo HTTP não permite, e o Werkzeug rejeita
 antes de chegar à aplicação. O que passa são espaços, pontuação e caracteres de controle.)*
 
+### CORS fechado: a lista de origens começa vazia
+`CORS_ORIGINS = []`. O CORS só existe para o navegador, e os clientes daqui não são navegadores:
+o app mobile e a silver não dependem dele. Com a lista vazia, nenhuma resposta libera outra
+origem, e um site alheio não lê a API pelo navegador de quem o visita. O Swagger continua
+funcionando porque é servido na mesma origem da API. Um frontend web entra pelo `settings.toml`,
+com os domínios dele, nunca com `*`.
+
+### Um usuário por processo no RabbitMQ e no Mongo, aplicado pelo job `setup`
+Cada processo conecta só com o que usa:
+
+| Usuário | Processo | Pode |
+|---|---|---|
+| `drive_producer` | `api` | escrever no exchange `telemetry` |
+| `drive_consumer` | `consumer` | ler a fila `bronze.telemetry` |
+| `bronze_writer` | `consumer` | `readWrite` no banco do bronze |
+| `bronze_reader` | `bronze-api` | `read` no banco do bronze |
+
+A credencial de administração fica só com o job `setup` e com a suíte.
+**A ACL é parte do desenho, e não só higiene.** A posse do VIN é conferida só no producer, e o
+consumer confia no veredito que vem no envelope. Essa confiança se sustenta porque nenhum outro
+usuário consegue publicar em `telemetry`. A mensagem morta não exige escrita do consumer: quem a
+leva à DLQ é o broker.
+**Por que no `setup`, e não num script de inicialização do Mongo** (`docker/mongo/initdb/`, como
+o plano previa): o script só roda com o volume vazio, não alcança um ambiente que já existe e
+não troca senha. No `setup`, aplicar de novo é a rotação: muda-se a senha no `.env`, e o próximo
+`docker compose up -d` a aplica e recria os processos. O mecanismo é o mesmo nos dois serviços.
+**O usuário do RabbitMQ é do broker, e não do vhost.** Por isso os nomes são configuráveis
+(`AMQP_PRODUCER_USER` e `AMQP_CONSUMER_USER`): a suíte usa outros, senão trocaria a senha dos
+processos de desenvolvimento. Quem mudar o nome muda também a URL no `docker-compose.yml`. Os
+usuários do Mongo moram no próprio banco do bronze e não alcançam outro. O `authSource` das URIs
+repete o `MONGO_DATABASE` do `settings.toml`: mudou um, mude o outro, ou o login falha com o
+código 18, que chega como `BronzeUnavailable`.
+**Limites aceitos:** no RabbitMQ, `queue.purge` exige só a permissão de leitura, então o consumer
+consegue esvaziar a própria fila. No Mongo, o `readWrite` também apaga documentos.
+**Descartado:** um papel próprio do Mongo só com `insert` e `find`. Fecharia a remoção para o
+consumer, ao custo de mais uma definição para manter, e ele já é o único processo que escreve
+no bronze.
+
 ---
 
 ## Operação
@@ -823,9 +885,10 @@ worker, mas quebra em silêncio no dia em que alguém ligar o `--preload`.
 Com dois processos HTTP, e réplicas deles, migrar na subida faria vários `alembic upgrade`
 disputarem o mesmo banco vazio. O serviço `setup` do compose (`docker/setup.sh`) migra e
 termina. O `api` e o `bronze-api` sobem com `RUN_MIGRATIONS=0` e só depois que o `setup`
-termina com sucesso (`service_completed_successfully`). Ele também aplica a topologia do
-RabbitMQ (`flask rabbitmq setup`) e os índices do bronze (`flask mongo setup`), e por isso
-espera o broker e o Mongo ficarem saudáveis. O `consumer` também espera o `setup`.
+termina com sucesso (`service_completed_successfully`). Ele também aplica a topologia e os
+usuários do RabbitMQ (`flask rabbitmq setup`) e os índices, a retenção e os usuários do bronze
+(`flask mongo setup`), e por isso espera o broker e o Mongo ficarem saudáveis. O `consumer`
+também espera o `setup`.
 **Por que o comando mora na extensão, e não no `ext/commands.py`:** o perfil `[setup]` carrega
 só o `ext.observability`, o `ext.mongo` e o `ext.rabbitmq`, e o `ext.commands` traria o banco
 e o container. O comando de operação fica na extensão dona da infraestrutura, num grupo com o

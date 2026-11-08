@@ -38,6 +38,11 @@ class ManagementApi:
         """Cria o vhost, se ainda não existir."""
         self._send("PUT", f"/api/vhosts/{_segment(vhost)}", {})
 
+    def put_user(self, name: str, password: str) -> None:
+        """Cria o usuário, ou troca a senha do que já existe. Sem tag: ele não entra no
+        painel nem na API de gerenciamento."""
+        self._send("PUT", f"/api/users/{_segment(name)}", {"password": password, "tags": ""})
+
     def grant(self, vhost: str, user: str, *, configure: str, write: str, read: str) -> None:
         """Define as permissões do usuário no vhost.
 

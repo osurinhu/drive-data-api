@@ -21,9 +21,12 @@ Decisões em 02-decisoes, seções Operação e Qualidade; o runbook é o `READM
 - Quem migra no compose é o job `setup` (`docker/setup.sh`). Processo novo do compose leva
   `<<: *runtime`, `FLASK_PROCESS`, `RUN_MIGRATIONS: "0"` e `depends_on` do `setup` com
   `service_completed_successfully`. O padrão do entrypoint continua `RUN_MIGRATIONS=1`, para o
-  container avulso (o do `/smoke-api`) migrar sozinho. O `setup` também aplica a topologia
-  (`flask rabbitmq setup`) e os índices do bronze (`flask mongo setup`), e espera o broker e o
-  Mongo saudáveis.
+  container avulso (o do `/smoke-api`) migrar sozinho. O `setup` também aplica a topologia e os
+  usuários do RabbitMQ (`flask rabbitmq setup`) e os índices, a retenção e os usuários do bronze
+  (`flask mongo setup`), e espera o broker e o Mongo saudáveis.
+- A credencial de administração (root do Mongo, admin do RabbitMQ) só vai no `setup` e no
+  `test`. Processo de longa duração conecta com o próprio usuário, na URL dele (02-decisoes, "Um
+  usuário por processo").
 - O `consumer` não publica porta (escala em réplicas). O healthcheck do compose roda dentro do
   container, em `:8081/health/ready`. Sem o broker ou o Mongo ele fica `unhealthy`, de pé, e volta
   sozinho. Ele trata SIGTERM (é o PID 1): o `docker compose stop consumer` termina a mensagem
@@ -35,7 +38,8 @@ Decisões em 02-decisoes, seções Operação e Qualidade; o runbook é o `READM
   no compose e no CI. Com 5 s, ele estourava durante um build, e o `test` recusava subir com a
   dependência `unhealthy`. No compose, também `interval` de 30 s e `start_interval` curto.
 - As senhas do `.env` entram nas URLs que o compose monta: só `token_urlsafe` (letras, números,
-  `-` e `_`). Postgres, Mongo e RabbitMQ criam o usuário só na primeira subida do volume.
+  `-` e `_`). Postgres, Mongo e RabbitMQ criam o administrador só na primeira subida do volume; os
+  usuários dos processos vêm do `setup`, a cada subida.
 - O estágio `runtime` usa `COPY` explícito (só o que roda); o `dev` acrescenta testes e
   ferramentas. `tests/` não pode entrar no `.dockerignore`.
 - Dependência nova: edite `requirements.txt` (faixa de versão) e regenere `requirements.lock.txt`
