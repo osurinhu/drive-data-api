@@ -9,7 +9,7 @@ a verificação.
 orientar  →  implementar  →  verificar  →  revisar  →  documentar
 CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 + rules/     /migracao        /smoke-api    arquitetura
-+ hook
++ hook                        /smoke-pipeline
 ```
 
 ## Mapa
@@ -23,6 +23,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | `skills/migracao/` | `/migracao`: gerar, revisar e validar migração Alembic | `/migracao`, ou ao mudar modelo |
 | `skills/nova-entidade/` | `/nova-entidade`: receita 1 ponta a ponta | `/nova-entidade`, ou ao pedir entidade nova |
 | `skills/smoke-api/` (`SKILL.md` + `smoke.sh`) | `/smoke-api`: a imagem de produção num container avulso com banco descartável, conferida por HTTP | `/smoke-api`, ou ao pedir para rodar, subir ou testar a API |
+| `skills/smoke-pipeline/` (`SKILL.md` + `smoke.sh` + `fluxo.py` + `compose.override.yml`) | `/smoke-pipeline`: os três processos reais num projeto do compose à parte, sem porta no host e com volumes descartáveis, conferidos por HTTP do app à silver | `/smoke-pipeline`, ou ao concluir mudança no caminho do pipeline |
 | `skills/medir-consultas/` | `/medir-consultas`: conta o SQL de uma operação e detecta N+1 (modelo de medição + modo `medir` do `verificar.sh`) | `/medir-consultas`, ou antes de otimizar consulta |
 | `agents/revisor-arquitetura.md` | revisão independente do diff, só leitura | ao fim de mudança não trivial |
 | `hooks/estado-docker.sh` | uma linha sobre o estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api`, `bronze-api` e `consumer` | início, retomada, `/clear` e compactação da sessão (hook `SessionStart`) |
@@ -52,6 +53,7 @@ Preferências pessoais vão em `settings.local.json`, que não é versionado.
 | 1 | `revisor-arquitetura` | feito e validado num ensaio sobre o molde `Item`: zero bloqueantes; os trechos das regras que gerariam falso positivo foram corrigidos (ver registro) |
 | 2 | `/smoke-api`: a imagem de produção num container avulso, com banco descartável, um usuário por papel (`flask create-user`), a matriz 401/403/404/409/422 por curl e o `X-Request-ID` rastreado no log — também é a skill que o `/run` embutido procura | feito em 2026-11-06 e validado: 24 verificações em ~30 s, `db` e `api` de desenvolvimento intocados, caminho de falha conferido por mutação. Falta a permissão no `settings.json` (ver registro) |
 | 2 | Hook `SessionStart` com uma linha de estado do Docker (daemon, `db`, `api`) | script feito e validado em 4 cenários; **falta registrá-lo no `settings.json`** (ver registro) |
+| 2 | `/smoke-pipeline`: o compose inteiro num projeto à parte (`-p smoke-pipeline`), na imagem de produção, com um usuário por papel, a matriz da leitura do bronze e o lote do app à silver, sem perda e sem repetição; o caos entra na Fase 5 | feito em 2026-11-07 (passo 1.5) e validado: 18 verificações em ~4 min, sem tocar no ambiente de desenvolvimento. Falta a permissão no `settings.json` (ver registro) |
 | 2 | `/remover-exemplo`: tirar `Item` com segurança quando houver entidades reais (a migração 0001 cria `users` e `items` juntas; `test_write_cost`, `test_authz` e `test_contracts` usam `Item`) | a fazer, quando existir a primeira entidade real: antes disso não há como validá-lo |
 | 3 | `/medir-consultas` (padrão `sql_log` / `test_write_cost`) antes de otimizar | feito em 2026-11-06 e validado: referência de `Item` medida; N+1 provocado por mutação (23 SELECT) e remédio com `selectinload` medido (4); trava contra a medição esquecida conferida |
 | 3 | `memory: project` no revisor, para acumular erros recorrentes | avaliado em 2026-11-06: adiado. Duas revisões ainda não mostram erro recorrente, e a memória daria ao revisor escrita no repositório e o viés das revisões anteriores. Reavaliar quando o mesmo achado se repetir em revisões diferentes |
@@ -320,3 +322,52 @@ que muda uma regra de projeto e por isso é decisão do usuário:
     como o Mongo fora. Cada operação também ganhou um prazo (`BRONZE_WRITE_TIMEOUT_SECONDS`):
     sem ele, um servidor que aceita a conexão e não responde prenderia o consumer até a queda
     do heartbeat.
+- **2026-11-07 — passo 1.5 do pipeline (a API da silver).** O `GET /bronze/records` no
+  `bronze-api` (a rota, o `bronze_schema.py` com o codec do cursor, o `BronzeReadService`, o
+  `MongoBronzeReader` e a `CursorPage`), o `tests/e2e/test_pipeline.py` e a skill
+  `/smoke-pipeline`.
+  - **Desvios do plano:**
+    - a sentinela `ANY_OWNER` e o tipo `OwnerScope` saíram do `service/base_service.py` para a
+      folha `domain/authz.py`. O pipeline não pode importar o `BaseService`, e assim o serviço
+      da silver recebe o escopo explícito e sem padrão, como o CRUD (02-decisoes);
+    - o prazo de cada operação e a classificação da falha do Mongo saíram do `bronze_writer.py`
+      para o `repository/mongo/server.py`, comum ao writer e ao leitor;
+    - o 503 da leitura não leva `Retry-After`: a silver repete no próprio intervalo de polling,
+      com o mesmo cursor;
+    - `BRONZE_READ_TIMEOUT_SECONDS` (5 s) no `settings.toml`, ao lado do prazo de gravação;
+    - os filtros e o cursor amarrado a eles continuam na Fase 4;
+    - a janela de estabilização é de 2 s no smoke (`FLASK_BRONZE_SETTLE_SECONDS` no override).
+      O e2e no processo a zera sobrepondo o provider do serviço (a fixture `sem_janela`).
+  - **Regras:** a `repositorios-mongo.md` ganhou o leitor, o `server.py`, o `readConcern` e o
+    teste do plano; a `servicos-telemetria.md`, o lado da silver e o escopo de dono; a
+    `schemas.md`, o `CursorField` e o contrato da `CursorPage`; a `testes.md`, os dublês e os
+    overrides novos; a `servicos.md`, o lugar novo do `OwnerScope`. O `CLAUDE.md` ganhou o
+    `/smoke-pipeline`. Valem a partir da sessão seguinte.
+  - **Lições:**
+    - o mypy reprova o override que renomeia um argumento (`_attr` no lugar de `attr`), e o
+      ruff reprova (`ARG002`) o argumento não usado com o nome original. O `_serialize` do
+      `CursorField` repassa tudo ao `super()._serialize`, e os dois ficam satisfeitos;
+    - `limit=0` no `find` do PyMongo quer dizer "sem limite". O leitor o recusa com
+      `ValueError`, para um bug não virar uma varredura da coleção;
+    - para provar que o reenvio não repetiu nada sem esperar um prazo arbitrário, o smoke manda,
+      depois do reenvio, um lote sentinela de 1 registro. Com um consumer só, a fila entrega na
+      ordem: quando o sentinela aparece na silver, o reenvio já foi processado, e a página traz
+      só o sentinela;
+    - o `/smoke-pipeline` leva ~4 min (137 s só no `up --wait`), contra ~30 s do `/smoke-api`.
+      Não serve para iterar: é o portão do passo.
+  - **Revisão** (`revisor-arquitetura`, sem bloqueantes). Um achado importante, corrigido: a 01
+    e o `test_composicao.py` diziam que a extensão fora do perfil não é importada, e o `api`
+    passou a importar o `ext.mongo` pelo leitor do bronze, que o container declara. Agora dizem
+    "não é inicializada", e um teste novo monta o `api` sem `MONGO_URI` e confere que ele fica
+    sem o cliente, sem o `flask mongo` e sem a sonda. Também corrigidos:
+    - o que o writer e o leitor compartilham, na 01;
+    - a docstring do `bronze_document.py`, que apontava o teste errado;
+    - as docstrings de `domain/authz.py` e `domain/ports.py` e as regras `autorizacao.md` e
+      `schemas.md`, sobre o escopo de dono e os limites da página do bronze;
+    - o `test_contracts.py` ficou mais estrito: o campo novo do `BronzeEntry` reprova até entrar
+      no schema ou em `OMITIDOS_DA_SILVER`;
+    - na 02 e no `bronze_schema.py`: o v1 do cursor continuará aceito como a leitura sem filtro
+      quando os filtros chegarem (Fase 4), para a silver não reler o bronze.
+
+    Ficou de fora reaproveitar o `BRONZE_START` como a época do codec do cursor: os valores
+    coincidem, mas um é a posição inicial da leitura e o outro, a origem dos milissegundos.

@@ -12,10 +12,11 @@ banco só pelo repositório. Molde: `app/service/item_service.py`; base:
 
 - `class XService(BaseService[X])` com `conflict_message` e `not_found_message` (as mensagens do
   409 e do 404) e `super().__init__(repository, owned=True)` — ou `owned=False` se for global.
-- Todo método que lê ou escreve dado com dono recebe `owner_scope: OwnerScope` explícito, **sem
-  default**: um default "sem filtro" vira vazamento no primeiro esquecimento (02-decisoes,
-  "Escopo de ownership por chamada"). Operação nova carrega o registro com
-  `self.get_by_id(id, owner_scope)`, que já devolve 404 para recurso de outro dono.
+- Todo método que lê ou escreve dado com dono recebe `owner_scope: OwnerScope` (de
+  `domain.authz`, com a sentinela `ANY_OWNER`) explícito, **sem default**: um default "sem
+  filtro" vira vazamento no primeiro esquecimento (02-decisoes, "Escopo de ownership por
+  chamada"). Operação nova carrega o registro com `self.get_by_id(id, owner_scope)`, que já
+  devolve 404 para recurso de outro dono.
 - Regras entram pelos ganchos `before_create(data)`, `before_update(model, changes)` e
   `before_delete(model)`. Texto obrigatório: `self._clean_text(valor, "nome do x")` — o schema
   barra `""`, o serviço barra `"   "` e também protege a CLI, que não passa por schema.

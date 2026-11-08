@@ -1,4 +1,4 @@
-"""Papéis e permissões — o vocabulário da autorização.
+"""Papéis, permissões e o escopo de dono — o vocabulário da autorização.
 
 Uma **permissão** é uma capacidade (`item:escrever`); um **papel** é um pacote
 nomeado de permissões, e é o papel que fica gravado em `users.role`. A rota
@@ -85,3 +85,24 @@ def permissions_of(role: Role) -> frozenset[Permission]:
 def has_permission(role: Role, *permissions: Permission) -> bool:
     """Verdadeiro se o papel tiver **todas** as permissões informadas."""
     return permissions_of(role).issuperset(permissions)
+
+
+# --- Escopo de dono -------------------------------------------------------------
+# Mora aqui, e não no `BaseService`, porque é vocabulário da autorização falado por
+# mais de uma camada: o `ext.auth` o concede (`current_owner_scope`), o CRUD o aplica
+# e o pipeline da telemetria, que não importa o `BaseService`, também o recebe.
+
+
+class AnyOwner:
+    """Sentinela que desativa o filtro de posse (uso administrativo)."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "ANY_OWNER"
+
+
+ANY_OWNER = AnyOwner()
+
+#: Id do dono, ou ANY_OWNER para ignorar o filtro de posse.
+OwnerScope = int | AnyOwner

@@ -4,8 +4,8 @@
 
 Entidades marcadas com ``owned=True`` pertencem a um usuário e só podem ser
 vistas/alteradas por ele. Todo método público exige um **escopo de dono**
-explícito — um id de usuário, ou a sentinela ``ANY_OWNER``, que
-``ext.auth.current_owner_scope(permissão)`` concede a quem tem a permissão de
+explícito — um id de usuário, ou a sentinela ``ANY_OWNER`` (``domain.authz``),
+que ``ext.auth.current_owner_scope(permissão)`` concede a quem tem a permissão de
 escopo correspondente.
 
 O escopo é parâmetro de método (e não de construtor) e **não tem valor padrão**;
@@ -17,25 +17,11 @@ from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 
+from domain.authz import ANY_OWNER, OwnerScope
 from domain.base import BaseModel
 from repository.sql.base_repository import BaseRepository
 from service.errors import BusinessRuleError, ConflictError, NotFoundError
 from service.pagination import Page
-
-
-class AnyOwner:
-    """Sentinela que desativa o filtro de posse (uso administrativo)."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "ANY_OWNER"
-
-
-ANY_OWNER = AnyOwner()
-
-#: Id do dono, ou ANY_OWNER para ignorar o filtro de posse.
-OwnerScope = int | AnyOwner
 
 
 class BaseService[ModelT: BaseModel]:

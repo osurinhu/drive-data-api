@@ -89,9 +89,10 @@ O `[Product]` não é decoração: é o que faz `get_by_id()` ser tipado como
 ### 1.4 Serviço — `app/service/product_service.py`
 
 ```python
+from domain.authz import OwnerScope
 from domain.models import Product
 from repository.sql.product_repository import ProductRepository
-from service.base_service import BaseService, OwnerScope
+from service.base_service import BaseService
 
 
 class ProductService(BaseService[Product]):
@@ -752,9 +753,11 @@ sem quebrar), acrescente-o a `SENDER_RELATIONS`; senão, é a v2.
 
 O bronze é a coleção `telemetry_records` do Mongo, que o consumer grava: um documento por
 registro, com `_id` igual ao `id` do registro, o bruto em `raw` e os metadados da ingestão em
-`ingestion` (02-decisoes, "A gravação no bronze é idempotente pelo `_id`"). O serviço monta um
-`BronzeEntry` e não conhece o BSON. Só o `repository/mongo/bronze_document.py` conhece o
-layout do documento.
+`ingestion` (02-decisoes, "A gravação no bronze é idempotente pelo `_id`"). A silver o lê
+pelo `bronze-api`, em ordem de gravação, por cursor (02-decisoes, "A silver lê o bronze por
+cursor"). Os serviços montam e recebem um `BronzeEntry` e não conhecem o BSON. Só o
+`repository/mongo/bronze_document.py` conhece o layout do documento: `to_document` na
+gravação, `from_document` na leitura.
 
 ### 12.1 Metadado novo no documento
 
@@ -764,12 +767,17 @@ layout do documento.
    registro ou de uma regra pura do mesmo módulo, como `available_metrics`. Se vem da mensagem,
    o contrato precisa trazê-lo antes (receita 11.1).
 3. A chave em `to_document` (`app/repository/mongo/bronze_document.py`), dentro de `ingestion`.
-   Id vai como texto, e data como `datetime` (o BSON guarda milissegundos).
-4. Os testes: a regra em `tests/unit/test_gravacao_bronze.py`, e o layout em
-   `test_grava_um_documento_por_registro_no_layout_do_bronze` (`tests/mongo/`).
+   Id vai como texto, e data como `datetime` (o BSON guarda milissegundos). E a volta em
+   `from_document`, no mesmo arquivo.
+4. Se a silver deve vê-lo, o campo no `BronzeRecordSchema` (`app/schemas/bronze_schema.py`); se
+   não, o nome em `OMITIDOS_DA_SILVER` (`tests/test_contracts.py`). O teste reprova o campo novo
+   que não esteja em nenhum dos dois, e o do schema que não exista no `BronzeEntry`.
+5. Os testes: a regra em `tests/unit/test_gravacao_bronze.py`; a ida e a volta em
+   `test_o_documento_lido_devolve_o_registro_gravado` (`tests/unit/test_leitura_bronze.py`); e
+   o layout em `test_grava_um_documento_por_registro_no_layout_do_bronze` (`tests/mongo/`).
 
-O bronze não é reescrito: os documentos já gravados ficam sem o campo, e quem os lê trata a
-ausência.
+O bronze não é reescrito: os documentos já gravados ficam sem o campo. O campo novo do
+`BronzeEntry` leva um valor padrão, e o `from_document` o lê com `ingestion.get(...)`.
 
 ### 12.2 Índice novo
 
@@ -783,7 +791,8 @@ ausência.
 O `create_index` é idempotente, mas mudar a definição de um índice que já existe reprova a
 aplicação: o Mongo recusa outro índice com o mesmo nome. Crie o novo com outro nome e apague o
 antigo numa mudança à parte. Índice que a consulta não usa é custo em toda gravação: meça
-antes com o `explain()`.
+antes com o `explain()`. O índice de uma leitura da silver ganha um teste do plano, no molde do
+`test_a_pagina_sai_do_indice_sem_ordenar_em_memoria` (`tests/mongo/test_bronze_reader.py`).
 
 ---
 
@@ -823,7 +832,9 @@ E confira:
 - [ ] O pipeline (`service/telemetry/`) só recebe adaptadores pelo construtor e não importa
       infraestrutura (`tests/unit/test_fronteiras.py` reprova).
 - [ ] Producer e consumer só se ligam pela fila: nenhum módulo do consumer alcança o lado HTTP
-      ou o SQL, e nenhum do producer alcança o Mongo (`tests/unit/test_fronteiras.py` reprova).
+      ou o SQL, e nenhum do producer alcança o Mongo. A leitura da silver não alcança a fila
+      nem a gravação, e o consumer não alcança a leitura (`tests/unit/test_fronteiras.py`
+      reprova).
 - [ ] O consumer só confirma a mensagem (`basic_ack`) depois da gravação confirmada. Falha
       transitória volta com `nack`, bug com `reject` com requeue, e só a mensagem fora do
       contrato vai direto para a DLQ (02-decisoes, "O destino de cada mensagem").

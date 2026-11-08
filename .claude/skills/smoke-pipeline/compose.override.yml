@@ -1,0 +1,22 @@
+# Override do /smoke-pipeline: o mesmo docker-compose.yml, num projeto à parte
+# (volumes próprios, apagados no fim), sem nenhuma porta no host. O ambiente de
+# desenvolvimento pode estar de pé ao mesmo tempo: nada aqui disputa porta, volume
+# ou fila com ele. O roteiro HTTP roda dentro do container do api, que alcança o
+# bronze-api pela rede do projeto (http://bronze-api:5000).
+services:
+  db:
+    ports: !reset []
+  mongo:
+    ports: !reset []
+  rabbitmq:
+    ports: !reset []
+  api:
+    ports: !reset []
+    # Sem o bind mount das migrações: o smoke roda as da imagem.
+    volumes: !reset []
+  bronze-api:
+    ports: !reset []
+    environment:
+      # A janela de estabilização curta: o smoke espera o registro sair, em vez de
+      # esperar os 30 s do settings.toml. O caminho é o mesmo.
+      FLASK_BRONZE_SETTLE_SECONDS: "2"

@@ -11,14 +11,16 @@ from flask import g
 
 from blueprint.http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
 from domain.authz import ROLE_PERMISSIONS, Permission, Role
+from domain.ports import BronzeEntry
 from ext.api import api
 from instrumentation.probes import registered_probes
+from schemas.bronze_schema import BronzePageSchema, BronzeRecordSchema
 from schemas.error_schema import ApiErrorSchema
 from schemas.health_schema import HealthSchema
 from schemas.pagination_schema import PageSchema
 from schemas.telemetry_schema import BatchReceiptSchema, RejectedRecordSchema
 from service.errors import ServiceError
-from service.pagination import Page
+from service.pagination import CursorPage, Page
 from service.telemetry.ingest_rules import RejectedRecord
 from service.telemetry.ingest_service import IngestReceipt
 
@@ -65,6 +67,25 @@ def test_recibo_do_lote_do_servico_e_do_schema_nao_divergem():
     renomeado de um lado só sumiria do recibo que o app lê."""
     assert {f.name for f in fields(IngestReceipt)} == set(BatchReceiptSchema().fields)
     assert {f.name for f in fields(RejectedRecord)} == set(RejectedRecordSchema().fields)
+
+
+#: Os campos do `BronzeEntry` que a silver não vê, de propósito: o `available_metrics`
+#: existe para o índice da Fase 4, e o bruto já traz as leituras.
+OMITIDOS_DA_SILVER = {"available_metrics"}
+
+
+def test_pagina_do_bronze_do_servico_e_do_schema_nao_divergem():
+    """O par para a leitura da silver: o serviço devolve `CursorPage` com itens
+    `BronzeEntry`, e o schema os serializa. Um campo renomeado só no envelope sumiria
+    da resposta; um do registro que não exista no `BronzeEntry` sairia sempre vazio.
+    Um campo novo do `BronzeEntry` reprova até alguém decidir: vai para o schema, ou
+    para `OMITIDOS_DA_SILVER`."""
+    registro = set(BronzeRecordSchema().fields)
+    entrada = {f.name for f in fields(BronzeEntry)}
+
+    assert {f.name for f in fields(CursorPage)} == set(BronzePageSchema().fields)
+    assert registro <= entrada
+    assert entrada - registro == OMITIDOS_DA_SILVER
 
 
 def test_envelope_de_erro_do_codigo_e_do_schema_nao_divergem(app):

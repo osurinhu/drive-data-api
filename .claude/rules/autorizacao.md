@@ -7,7 +7,9 @@ paths:
 # Autorização (`app/domain/authz.py`, `app/ext/auth.py`)
 
 `authz.py` é folha do domínio (ver `rules/dominio.md`): não importa nada do projeto, para que rota, serviço, modelo e schema
-usem o mesmo vocabulário sem ciclo. Receitas: 03-como-estender §1.7 e §10; decisões em
+usem o mesmo vocabulário sem ciclo. Também mora nele o escopo de dono (`OwnerScope`, a
+sentinela `ANY_OWNER`): o `ext.auth` o concede, e o `BaseService` e o pipeline o recebem.
+Receitas: 03-como-estender §1.7 e §10; decisões em
 02-decisoes, seção Segurança.
 
 - Permissão é capacidade, no formato `recurso:verbo` (`ITEM_LER = "item:ler"`). Por recurso,

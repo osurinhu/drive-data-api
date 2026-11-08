@@ -58,7 +58,8 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 1. Ache a receita em `documentacao/03-como-estender.md` e o molde em `Item`.
 2. Implemente seguindo as regras da camada.
 3. `/verificar testes <arquivo>` para iterar; `/verificar` (tudo) antes de concluir. Mudou
-   rota, autenticação, configuração, Docker ou migração? Rode também o `/smoke-api`.
+   rota, autenticação, configuração, Docker ou migração? Rode também o `/smoke-api`. Mudou o
+   caminho do pipeline (telemetria, fila, consumer, bronze)? Também o `/smoke-pipeline`.
 4. Mudança não trivial: peça revisão ao agente `revisor-arquitetura`. Ele cuida da
    conformidade com a arquitetura; para bugs há `/code-review` e para segurança `/security-review`.
 5. Mudou comportamento documentado ou tomou decisão estrutural? Atualize `documentacao/` na
@@ -73,6 +74,8 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 - `/nova-entidade <Nome>` — entidade ponta a ponta (receita 1).
 - `/smoke-api` — a imagem de produção num container avulso com banco descartável, conferida
   por HTTP (a matriz 401/403/404 e o `X-Request-ID` no log). É também o "rodar/subir a API".
+- `/smoke-pipeline` — os três processos reais (`api`, `consumer`, `bronze-api`) num projeto do
+  compose à parte, conferidos por HTTP do app à silver (~4 min).
 - `/medir-consultas <operação>` — conta o SQL emitido e detecta N+1 antes de otimizar.
 - Agente `revisor-arquitetura` — revisão independente do diff.
 - Hook `SessionStart` (`.claude/hooks/estado-docker.sh`) — a sessão começa com uma linha sobre o

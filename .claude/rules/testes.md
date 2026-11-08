@@ -28,9 +28,15 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
   DLQ vazias no começo e no fim; chamadas, devolvem e tiram as mensagens como
   `(propriedades, corpo)`); `publicar(corpo)` (publica no exchange da telemetria, com
   confirmação); `novo_lote(registros)` (um `TelemetryBatchV1` válido); `fila_em_memoria` (o
-  dublê `FilaEmMemoria` do `TelemetryPublisher`, com `publicados` e `falhar`).
+  dublê `FilaEmMemoria` do `TelemetryPublisher`, com `publicados` e `falhar`);
+  `leitura_em_memoria` (o dublê `LeituraEmMemoria` do `BronzeReader`, com `agora`,
+  `gravar(ingerido_ha)`, `fora` e `chamadas`). Em `tests/mongo/`, `mongo_avulso(nome, uri)`
+  abre um Mongo em outro endereço (fora do ar, credencial errada).
 - A rota usa o dublê por `app.container.<provider>.override(providers.Object(dublê))`, com
-  `reset_override()` na saída (fixture `fila` de `tests/test_telemetry.py`). O adaptador contra
+  `reset_override()` na saída (fixtures `fila` de `tests/test_telemetry.py` e `bronze` de
+  `tests/test_bronze_api.py`). O e2e troca só a configuração de um serviço, sobrepondo o
+  provider dele com um `providers.Factory` novo (a fixture `sem_janela` de
+  `tests/e2e/test_pipeline.py`). O adaptador contra
   o broker de verdade fica para `tests/rabbitmq/` e `tests/e2e/`; na raiz, só apontado para uma
   porta fechada (o 503 com o broker fora). Dado de teste fixo (o exemplo canônico do
   contrato) mora em `tests/data/`.

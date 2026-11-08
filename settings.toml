@@ -63,6 +63,16 @@ MONGO_TIMEOUT_SECONDS = 5
 # Mongo fora. Fica bem abaixo de dois heartbeats do AMQP: o consumer que espera mais que
 # isso perde a conexão com o broker, e aí a entrega conta.
 BRONZE_WRITE_TIMEOUT_SECONDS = 10
+# Prazo de cada operação do bronze-api no bronze, inclusive a espera por um servidor.
+# Cada leitura faz duas (a hora do servidor e a página): com o Mongo fora ou mudo, a
+# requisição responde 503 em até duas vezes isto, bem antes do timeout do gunicorn (30 s).
+BRONZE_READ_TIMEOUT_SECONDS = 5
+# A janela de estabilização da leitura da silver: só sai o que o bronze gravou há mais
+# disto, pelo relógio do próprio bronze (o mesmo que carimba o ingested_at). É o que
+# garante que nada grave atrás de um cursor que a silver já passou, desde que entre o
+# consumer carimbar o registro e a gravação ficar visível passe menos que isto. O custo
+# é a defasagem: a silver vê cada registro uns 30 s depois de ele chegar ao bronze.
+BRONZE_SETTLE_SECONDS = 30
 
 # --- RabbitMQ (fila da telemetria) --------------------------------------------
 # A URL, com usuário, senha e vhost, vem de FLASK_AMQP_URL.
@@ -148,6 +158,7 @@ API_V1_ROUTES = [
     "blueprint.restapi.v1.item",
     "blueprint.restapi.v1.vehicle",
     "blueprint.restapi.v1.telemetry",
+    "blueprint.restapi.v1.bronze",
 ]
 
 
@@ -200,6 +211,7 @@ EXTENSIONS = [
 API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
+    "blueprint.restapi.v1.bronze",
 ]
 HEALTH_CRITICAL = ["database", "mongo"]
 

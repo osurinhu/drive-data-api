@@ -2,9 +2,8 @@
 
 import pytest
 
-from domain.authz import Role
+from domain.authz import ANY_OWNER, Role
 from domain.ports import AuthorizedVehicle, SenderRelation
-from service.base_service import ANY_OWNER
 from service.errors import BusinessRuleError
 
 VEHICLE_URL = "/api/v1/vehicle/"

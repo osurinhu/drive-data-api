@@ -1,20 +1,27 @@
-"""Container de injeção de dependência.
+"""Container de injeção de dependência dos processos HTTP (o api e o bronze-api).
 
 Declara num lugar só como o grafo de objetos é montado (repository → service, e
-os adaptadores, como o publisher, → os serviços do pipeline).
+os adaptadores, como o publisher e o leitor do bronze, → os serviços do pipeline).
 A rota recebe o service pronto via ``@inject`` + ``Provide[Container.x]``, o que
 permite trocar qualquer peça por um dublê nos testes.
+
+Os dois processos declaram o grafo inteiro, mas cada um só cria o que as rotas do
+seu perfil pedem: o api nunca cria o leitor do bronze, e o bronze-api nunca cria o
+publisher. Quem conecta a cada serviço externo são as extensões do perfil
+(``EXTENSIONS``).
 """
 
 from dependency_injector import containers, providers
 from flask import Flask
 
 from messaging.publisher import RabbitTelemetryPublisher
+from repository.mongo.bronze_reader import MongoBronzeReader
 from repository.sql.item_repository import ItemRepository
 from repository.sql.user_repository import UserRepository
 from repository.sql.vehicle_repository import VehicleRepository
 from service.auth_service import AuthService
 from service.item_service import ItemService
+from service.telemetry.bronze_read_service import BronzeReadService
 from service.telemetry.ingest_service import TelemetryIngestService
 from service.user_service import UserService
 from service.vehicle_service import VehicleService
@@ -45,6 +52,10 @@ class Container(containers.DeclarativeContainer):
         connection_name=config.amqp.publisher_connection_name,
     )
 
+    # --- Bronze (a leitura da silver) -------------------------------------------
+    # Factory: o leitor não guarda conexão; o cliente é do `ext.mongo`, um por processo.
+    bronze_reader = providers.Factory(MongoBronzeReader, timeout=config.bronze.read_timeout)
+
     # --- Services -------------------------------------------------------------
     user_service = providers.Factory(UserService, repository=user_repository)
     auth_service = providers.Factory(AuthService, repository=user_repository)
@@ -55,6 +66,9 @@ class Container(containers.DeclarativeContainer):
         authorization=vehicle_repository,
         publisher=telemetry_publisher,
         retry_after_seconds=config.ingest.retry_after_seconds,
+    )
+    bronze_read_service = providers.Factory(
+        BronzeReadService, reader=bronze_reader, settle_seconds=config.bronze.settle_seconds
     )
 
 
@@ -70,6 +84,10 @@ def init_app(app: Flask) -> None:
                 "publisher_connection_name": f"drive-data:{process}:publisher",
             },
             "ingest": {"retry_after_seconds": int(app.config["INGEST_RETRY_AFTER_SECONDS"])},
+            "bronze": {
+                "read_timeout": float(app.config["BRONZE_READ_TIMEOUT_SECONDS"]),
+                "settle_seconds": float(app.config["BRONZE_SETTLE_SECONDS"]),
+            },
         }
     )
     # Resolve os marcadores Provide[...] das rotas que este processo registra

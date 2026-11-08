@@ -4,16 +4,13 @@ O contexto de aplicação que o adaptador exige (``mongo.db``) vem do conftest d
 pasta.
 """
 
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
-from flask import Flask
 
 from domain.ports import BronzeEntry, BronzeUnavailable
-from ext import mongo as ext_mongo
 from repository.mongo import indexes
 from repository.mongo.bronze_document import RECORDS
 from repository.mongo.bronze_writer import MongoBronzeWriter
@@ -46,25 +43,6 @@ def _registro(**campos) -> BronzeEntry:
 @pytest.fixture
 def writer():
     return MongoBronzeWriter(timeout=5)
-
-
-@contextmanager
-def _mongo_avulso(nome: str, uri: str):
-    """Uma aplicação só com o ``ext.mongo``, apontada para ``uri``, com o contexto aberto."""
-    aplicacao = Flask(nome)
-    aplicacao.config.update(
-        PROCESS="testes",
-        MONGO_URI=uri,
-        MONGO_DATABASE="nada_test",
-        MONGO_TIMEOUT_SECONDS=0.3,
-        HEALTH_PROBE_TIMEOUT_SECONDS=0.3,
-    )
-    ext_mongo.init_app(aplicacao)
-    try:
-        with aplicacao.app_context():
-            yield
-    finally:
-        aplicacao.extensions["mongo"].client.close()
 
 
 def test_grava_um_documento_por_registro_no_layout_do_bronze(writer, mongo_db):
@@ -125,19 +103,19 @@ def test_a_hora_do_servidor_vem_com_fuso_e_e_a_de_agora(writer):
     assert abs(hora - datetime.now(UTC)) < timedelta(minutes=1)
 
 
-def test_mongo_fora_do_ar_vira_bronze_indisponivel():
+def test_mongo_fora_do_ar_vira_bronze_indisponivel(mongo_avulso):
     # Dentro do prazo da operação, a espera pelo servidor é o próprio prazo (o
     # MONGO_TIMEOUT_SECONDS não vale ali): um prazo curto deixa o teste rápido.
     writer = MongoBronzeWriter(timeout=0.5)
 
-    with _mongo_avulso("mongo-fora-do-ar", "mongodb://ninguem:nada@127.0.0.1:1/"):
+    with mongo_avulso("mongo-fora-do-ar", "mongodb://ninguem:nada@127.0.0.1:1/"):
         with pytest.raises(BronzeUnavailable):
             writer.server_time()
         with pytest.raises(BronzeUnavailable):
             writer.insert_new([_registro()])
 
 
-def test_credencial_recusada_vira_bronze_indisponivel(_app_do_mongo):
+def test_credencial_recusada_vira_bronze_indisponivel(_app_do_mongo, mongo_avulso):
     """Credencial ou permissão erradas atingem toda mensagem, como o Mongo fora do ar:
     o lote volta para a fila, em vez de gastar o limite de entregas e ir para a DLQ.
 
@@ -148,7 +126,7 @@ def test_credencial_recusada_vira_bronze_indisponivel(_app_do_mongo):
     uri = urlsplit(_app_do_mongo.config["MONGO_URI"])
     netloc = f"{uri.username}:senha-errada@{uri.hostname}:{uri.port or 27017}"
 
-    with _mongo_avulso("credencial-errada", urlunsplit(uri._replace(netloc=netloc))):
+    with mongo_avulso("credencial-errada", urlunsplit(uri._replace(netloc=netloc))):
         with pytest.raises(BronzeUnavailable, match="OperationFailure 18"):
             writer.server_time()
         with pytest.raises(BronzeUnavailable):

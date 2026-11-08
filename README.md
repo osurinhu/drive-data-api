@@ -84,7 +84,7 @@ requisição seguinte, mesmo com o token já emitido).
 | Processo | `FLASK_PROCESS` | Porta | Dependências | Sem ela, o `/health/` responde |
 |---|---|---|---|---|
 | `api` | `api` | 5000 | Postgres, RabbitMQ | 503 sem o Postgres; 200 `degraded` sem o RabbitMQ |
-| `bronze-api` | `bronze_api` | 5001 | Postgres, Mongo | 503 sem qualquer um dos dois |
+| `bronze-api` | `bronze_api` | 5001 | Postgres, Mongo | 503 sem qualquer um dos dois (e a leitura do bronze, 503 sem o Mongo) |
 | `consumer` | `consumer` | — | Mongo, RabbitMQ | ainda não tem `/health/`. Sem o Mongo, pausa e as mensagens esperam na fila; sem o RabbitMQ, sai com erro e o compose o reinicia |
 | `setup` (job) | `setup` | — | Postgres, RabbitMQ (API de gerenciamento), Mongo | termina depois de migrar e aplicar a topologia e os índices |
 
@@ -123,6 +123,29 @@ fica em 0. Uma mensagem na DLQ estava fora do contrato ou falhou mais que
 `AMQP_DELIVERY_LIMIT` vezes, e o log do consumer diz qual. Com o consumer parado
 (`docker compose stop consumer`), o `api` continua respondendo 202 e a fila acumula; quando ele
 volta (`docker compose start consumer`), ela é drenada, sem duplicar nada.
+
+A camada silver lê o bronze pelo `bronze-api` (porta 5001), com uma conta de papel `silver`,
+que só a CLI cria:
+
+```bash
+docker compose exec api flask create-user --name silver-etl --role silver   # pede a senha
+curl -X POST http://localhost:5001/api/v1/auth/token \
+  -H 'Content-Type: application/json' -d '{"name":"silver-etl","password":"a-senha-da-silver"}'
+
+# do começo do bronze; depois, de onde parou, com o next_cursor da resposta anterior
+curl "http://localhost:5001/api/v1/bronze/records?limit=500" -H "Authorization: Bearer <token>"
+curl "http://localhost:5001/api/v1/bronze/records?limit=500&cursor=<next_cursor>" \
+  -H "Authorization: Bearer <token>"
+```
+
+A resposta traz `items` (o bruto e os metadados de cada registro), `next_cursor`, `has_more` e
+`watermark`. Os registros saem na ordem em que o bronze os gravou, e só os gravados há mais de
+`BRONZE_SETTLE_SECONDS` (30 s): é o que garante que nenhum registro grave atrás de um cursor
+que a silver já passou. A silver guarda o `next_cursor` só depois de processar a página, chama
+de novo em seguida enquanto `has_more` for verdadeiro e, quando não for, espera o intervalo de
+polling. Uma queda entre processar e guardar repete a página: ela deduplica por `record_id`.
+Com o Mongo fora, a resposta é 503, e a chamada se repete com o mesmo cursor. Nem o `admin`
+nem o `usuario` leem o bronze (403).
 
 ### Rodando fora do Docker
 

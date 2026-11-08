@@ -42,11 +42,15 @@ módulo e acrescenta uma linha na configuração.
 A mesma imagem roda mais de um processo, e cada um carrega só o que usa. A variável
 `FLASK_PROCESS` escolhe uma seção do `settings.toml`, o **perfil**. As chaves do perfil valem
 sobre as do `[default]`, e uma lista declarada no perfil (`EXTENSIONS`, `API_V1_ROUTES`)
-substitui a do `[default]` inteira. A extensão ou a rota que fica fora da lista do processo não
-é importada, não exige configuração e não aparece no health dele. O container liga só as rotas
-do perfil. Os serviços, os repositórios e os adaptadores (o publisher, que importa o pika),
-porém, ficam todos declarados no `ext/container.py`, comum aos processos HTTP: o `bronze-api`
-importa o pika sem nunca conectar, porque só a rota de telemetria cria o publisher. O consumer
+substitui a do `[default]` inteira. A extensão que fica fora da lista do processo não é
+inicializada: não exige configuração, não cria cliente nem comando e não aparece no health
+dele. A rota fora da lista nem é importada: o container liga só as rotas do perfil. Os
+serviços, os repositórios e os adaptadores (o publisher, que importa o pika, e o leitor do
+bronze, que importa o pymongo e o `ext.mongo`, a quem pede o cliente na hora do uso), porém,
+ficam todos declarados no `ext/container.py`, comum aos processos HTTP. O `bronze-api` importa o
+pika sem nunca conectar, porque só a rota de telemetria cria o publisher. O `api` importa o
+módulo `ext.mongo` sem inicializá-lo nem conectar, porque só a rota de leitura do bronze cria o
+leitor, e o perfil dele não lista a extensão (o `test_composicao.py` confere). O consumer
 não usa esse container: o `ext/consumer_container.py` monta só o lado dele do pipeline (o
 consumer da fila, o serviço de gravação e o adaptador do Mongo), e o processo não importa o
 grafo do lado HTTP.
@@ -55,7 +59,7 @@ grafo do lado HTTP.
 |---|---|---|---|
 | `[default]` (sem `FLASK_PROCESS`) | desenvolvimento local e a suíte de testes | todas: é a união dos perfis | todas |
 | `[api]` | serviço `api` do compose: login, as rotas de negócio e o recebimento dos lotes de telemetria, que ele publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item`, `vehicle`, `telemetry` |
-| `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que lê o bronze (por enquanto, só login) | Postgres e Mongo | `health`, `auth` |
+| `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que faz login e lê o bronze por cursor (`GET /bronze/records`) | Postgres e Mongo | `health`, `auth`, `bronze` |
 | `[consumer]` | serviço `consumer` do compose (`flask consumer run`): consome a fila `bronze.telemetry` e grava cada registro no bronze | Mongo e RabbitMQ (sem Postgres e sem JWT) | nenhuma |
 | `[setup]` | o job `setup`: migra, aplica a topologia do RabbitMQ e os índices do bronze e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação; RabbitMQ, pela API de gerenciamento (`flask rabbitmq setup`); Mongo (`flask mongo setup`) | nenhuma |
 
@@ -63,8 +67,9 @@ Um `FLASK_PROCESS` que não é seção do `settings.toml` reprova a subida: sozi
 cairia calado no `[default]`. O `tests/unit/test_composicao.py` fixa as fronteiras. Ele exige
 que o `[default]` seja a união dos perfis e que nenhum perfil carregue o que o processo não
 usa. Também monta processos à parte: confere que o consumer não importa SQLAlchemy, JWT, os
-modelos, os repositórios SQL nem o lado do producer, e que o `bronze-api` não importa a rota de
-item. O que o processo montado não mostra (no consumer, um import que só um caminho raro
+modelos, os repositórios SQL nem o lado do producer, e que cada processo HTTP só importa as
+rotas do próprio perfil (o `bronze-api` não importa as do `api`, e o `api` não importa a leitura
+do bronze). O que o processo montado não mostra (no consumer, um import que só um caminho raro
 executa), o `tests/unit/test_fronteiras.py` pega lendo o código (ver "Producer e consumer",
 abaixo).
 
@@ -79,7 +84,7 @@ tempo.
 |---|---|---|---|
 | **Rota** | `app/blueprint/restapi/v1/` | Traduzir HTTP em chamada de serviço. Validar entrada por schema, devolver a saída. | Montar consulta, conter regra de negócio, usar `try/except` para erro de domínio |
 | **Serviço** | `app/service/` (o pipeline de telemetria em `service/telemetry/`) | Regra de negócio, validação semântica, ownership, controle de transação. O CRUD segue o `BaseService`; o pipeline depende só de portas (`domain/ports.py`) e recebe os adaptadores pelo construtor. | Tocar no ORM direto, saber o que é HTTP (status, header, request). O pipeline, além disso, importar infraestrutura ou adaptador |
-| **Repositório** | `app/repository/` (uma subpasta por tecnologia: `sql/` e `mongo/`) | Única camada que lê e grava dados: o SQL mora em `repository/sql/`, o bronze em `repository/mongo/`. Traduz intenção em consulta. Os adaptadores do Mongo implementam portas do pipeline (`BronzeWriter`) e são os únicos que conhecem o layout do documento. | Conter regra de negócio ou decidir permissão; uma subpasta importar a tecnologia da outra |
+| **Repositório** | `app/repository/` (uma subpasta por tecnologia: `sql/` e `mongo/`) | Única camada que lê e grava dados: o SQL mora em `repository/sql/`, o bronze em `repository/mongo/`. Traduz intenção em consulta. Os adaptadores do Mongo implementam portas do pipeline (`BronzeWriter`, `BronzeReader`) e são os únicos que conhecem o layout do documento. | Conter regra de negócio ou decidir permissão; uma subpasta importar a tecnologia da outra |
 | **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `ports.py`, `contracts/`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
 | **Schema** | `app/schemas/` | Único contrato de entrada e saída da API. Valida e serializa. | Acessar banco |
 
@@ -161,15 +166,22 @@ lado (tudo o que o módulo carrega, direta ou indiretamente) e reprova se:
 
 - o consumer (a partir de todas as extensões do perfil `[consumer]`) alcançar `blueprint`,
   `ext.auth`, `ext.container`, `ext.database`, `repository.sql`, o ORM,
-  `service.telemetry.ingest_*` ou `messaging.publisher`;
+  `service.telemetry.ingest_*`, `messaging.publisher` ou o lado da silver
+  (`service.telemetry.bronze_read_service`, `repository.mongo.bronze_reader`);
 - o producer (a partir da rota de telemetria, do `ingest_service` e do publisher) alcançar
   `ext.mongo`, `ext.consumer`, `repository.mongo`, `service.telemetry.bronze_*` ou
   `messaging.consumer`;
+- a silver (a partir da rota do bronze, do `bronze_read_service` e do leitor) alcançar
+  `ext.rabbitmq`, `ext.consumer`, `messaging`, o pika, `service.telemetry.ingest_*` ou o lado
+  do consumer (`bronze_ingest_service`, `bronze_rules`, `repository.mongo.bronze_writer`);
 - uma subpasta do repositório alcançar a tecnologia da outra, ou o serviço.
 
-O fecho do producer não segue o `ext.container`: ele é a raiz de composição dos dois processos
-HTTP e vai montar também o leitor do bronze do `bronze-api`. Quem decide o que cada processo
-conecta é o perfil, e o `test_composicao.py` confere o processo montado.
+Os fechos do producer e da silver não seguem o `ext.container`: ele é a raiz de composição dos
+dois processos HTTP e monta os adaptadores de ambos (o publisher e o leitor do bronze). Quem
+decide o que cada processo conecta é o perfil, e o `test_composicao.py` confere o processo
+montado. Do bronze, o writer (consumer) e o leitor (silver) compartilham só o cliente do
+`ext.mongo`, o layout do documento (`bronze_document.py`) e o `server.py` (o prazo de cada
+operação, a classificação da falha e a hora do servidor).
 
 ---
 
@@ -257,7 +269,8 @@ service.get_by_id(item_id, current_owner_scope(Permission.ITEM_LER_DE_TODOS))
 ```
 
 `current_owner_scope(permissão)` (em `app/ext/auth.py`) devolve o id do usuário logado, ou
-a sentinela `ANY_OWNER` se o papel dele tiver a permissão de escopo informada. É o
+a sentinela `ANY_OWNER` (de `domain/authz.py`) se o papel dele tiver a permissão de escopo
+informada. É o
 **único** lugar onde o filtro de posse é dispensado, e a permissão vem explícita no ponto
 de chamada para que a rota diga *de quem* ela opera sem precisar abrir o `auth.py`.
 
@@ -349,7 +362,8 @@ app/
   domain/                    o ORM (base, models) e as folhas (o resto)
     base.py                  BaseModel (campos de controle, convenção de nomes)
     models.py                User, Item, Vehicle
-    authz.py                 papéis, permissões e o mapa entre eles (folha)
+    authz.py                 papéis, permissões, o mapa entre eles e o escopo de dono
+                             (ANY_OWNER) (folha)
     vin.py                   formato e forma canônica do VIN (folha)
     ports.py                 portas do pipeline: Protocol e os tipos que trocam (folha)
     contracts/
@@ -361,13 +375,17 @@ app/
       item_repository.py
       vehicle_repository.py  + authorized_vins: a posse para o envio (uma consulta por lote)
     mongo/                   pymongo: o bronze
-      bronze_document.py     BronzeEntry → documento: o único lugar que conhece o layout
+      bronze_document.py     BronzeEntry ↔ documento: o único lugar que conhece o layout
+      server.py              o prazo de cada operação, a falha da infraestrutura
+                             (BronzeUnavailable) e a hora do servidor: comum ao writer e ao leitor
       bronze_writer.py       gravação idempotente pelo _id (porta BronzeWriter) + hora do servidor
+      bronze_reader.py       leitura em ordem de gravação, depois de uma posição (porta
+                             BronzeReader) + hora do servidor
       indexes.py             os índices do bronze (aplicados pelo setup)
   service/
     base_service.py          CRUD + ownership + ganchos
     errors.py                exceções de domínio
-    pagination.py            dataclass Page
+    pagination.py            dataclasses Page (por número de página) e CursorPage (por cursor)
     auth_service.py          verificação de credenciais
     user_service.py
     item_service.py
@@ -377,6 +395,7 @@ app/
       ingest_service.py      producer: posse do lote + publicação; o recibo (IngestReceipt)
       bronze_rules.py        consumer: o BronzeEntry de cada registro, available_metrics
       bronze_ingest_service.py  consumer: grava o lote no bronze; duplicado é sucesso
+      bronze_read_service.py    silver: a janela de estabilização, o cursor e o has_more
   schemas/
     pagination_schema.py     parâmetros e envelope de paginação
     error_schema.py          envelope de erro (documentação)
@@ -385,6 +404,7 @@ app/
     item_schema.py
     vehicle_schema.py
     telemetry_schema.py      o lote do app e o recibo 202
+    bronze_schema.py         a query da leitura, o codec do cursor e a página da silver
   blueprint/
     http_errors.py           envelope de erro + mapa exceção → HTTP
   blueprint/restapi/v1/
@@ -393,6 +413,7 @@ app/
     item.py                  CRUD da entidade de exemplo
     vehicle.py               cadastro de veículos (quem cadastra é o gestor)
     telemetry.py             POST /telemetry/batches: o lote do app, a caminho da fila
+    bronze.py                GET /bronze/records: a silver lê o bronze por cursor
 
 migrations/                  Alembic
 tests/                       pytest; a raiz usa Postgres e HTTP, unit/ não usa nada, mongo/ e

@@ -1,8 +1,11 @@
 """Composição dos processos: o que cada perfil do settings.toml carrega.
 
 A mesma imagem roda vários processos, e cada um carrega só o que usa. "Não usa"
-quer dizer que o processo não importa a extensão nem a rota, não exige a
-configuração delas e não as mostra no health. O [default] é a união dos perfis,
+quer dizer que o processo não inicializa a extensão (não exige a configuração
+dela, não cria cliente nem comando e não a mostra no health) e não importa a
+rota. O módulo da extensão pode vir importado por um adaptador do container
+comum aos processos HTTP, que lhe pede o cliente só na hora do uso: o api
+importa o ``ext.mongo`` pelo leitor do bronze. O [default] é a união dos perfis,
 para que a suíte, que roda nele, exercite todos os módulos.
 
 Os testes leem só a configuração (``build_config``): montar a aplicação de outro
@@ -137,10 +140,19 @@ RAIZ = Path(__file__).resolve().parents[2]
 MONGO_FECHADO = "mongodb://ninguem:nada@127.0.0.1:1/"
 AMQP_FECHADO = "amqp://ninguem:nada@127.0.0.1:1/teste"
 
+#: O mínimo que um processo HTTP exige para montar: valores sem uso real, e o
+#: banco e o broker numa porta fechada.
+AMBIENTE_HTTP = {
+    "FLASK_SQLALCHEMY_DATABASE_URI": "postgresql+psycopg://ninguem:nada@127.0.0.1:1/nada",
+    "FLASK_SECRET_KEY": "chave-do-teste-de-composicao-sem-valor-0001",
+    "FLASK_JWT_SECRET_KEY": "chave-jwt-do-teste-de-composicao-sem-valor-0002",
+    "FLASK_AMQP_URL": AMQP_FECHADO,
+}
+
 
 def _montar_num_processo_a_parte(perfil: str, imprime: str, **variaveis: str) -> str:
     """Monta a aplicação do ``perfil`` num processo novo e devolve o que ``imprime``
-    (uma expressão Python sobre ``sys.modules``) escreveu.
+    (uma expressão Python sobre ``sys.modules`` e a ``app`` montada) escreveu.
 
     O ambiente não leva nenhuma ``FLASK_*`` da suíte, só as de ``variaveis``. O
     ``sys.path`` é o desta suíte, para que o processo importe do mesmo lugar.
@@ -149,7 +161,7 @@ def _montar_num_processo_a_parte(perfil: str, imprime: str, **variaveis: str) ->
         chave: valor for chave, valor in os.environ.items() if not chave.startswith("FLASK_")
     }
     ambiente.update(variaveis, FLASK_PROCESS=perfil, PYTHONPATH=os.pathsep.join(sys.path))
-    codigo = f"import sys\nfrom app import create_app\ncreate_app()\nprint({imprime})\n"
+    codigo = f"import sys\nfrom app import create_app\napp = create_app()\nprint({imprime})\n"
 
     resultado = subprocess.run(
         [sys.executable, "-c", codigo],
@@ -192,17 +204,39 @@ def test_o_consumer_sobe_sem_postgres_sem_jwt_e_sem_importar_os_dois():
     assert importados == "", f"o consumer importou: {importados}"
 
 
-def test_o_processo_so_importa_as_rotas_do_proprio_perfil():
+@pytest.mark.parametrize(
+    ("perfil", "esperadas"),
+    [
+        pytest.param("api", "auth,health,item,telemetry,vehicle", id="api"),
+        pytest.param("bronze_api", "auth,bronze,health", id="bronze_api"),
+    ],
+)
+def test_o_processo_so_importa_as_rotas_do_proprio_perfil(perfil, esperadas):
     """O container liga (e, para isso, importa) só as rotas do perfil. Com o
-    pacote inteiro no wiring, o bronze_api importaria a rota de item, e o api,
-    um dia, a de leitura do bronze."""
+    pacote inteiro no wiring, o bronze_api importaria a rota de item e o envio de
+    telemetria, e o api, a leitura do bronze."""
+    prefixo = "blueprint.restapi.v1."
     rotas = _montar_num_processo_a_parte(
-        "bronze_api",
-        '",".join(sorted(m for m in sys.modules if m.startswith("blueprint.restapi.v1.")))',
-        FLASK_SQLALCHEMY_DATABASE_URI="postgresql+psycopg://ninguem:nada@127.0.0.1:1/nada",
-        FLASK_SECRET_KEY="chave-do-teste-de-composicao-sem-valor-0001",
-        FLASK_JWT_SECRET_KEY="chave-jwt-do-teste-de-composicao-sem-valor-0002",
+        perfil,
+        f'",".join(sorted(m.removeprefix("{prefixo}") for m in sys.modules '
+        f'if m.startswith("{prefixo}")))',
+        **AMBIENTE_HTTP,
         FLASK_MONGO_URI=MONGO_FECHADO,
     )
 
-    assert rotas == "blueprint.restapi.v1.auth,blueprint.restapi.v1.health"
+    assert rotas == esperadas
+
+
+def test_o_api_nao_inicializa_o_ext_mongo_que_o_container_importa():
+    """O leitor do bronze, declarado no container comum aos processos HTTP, importa
+    o ``ext.mongo`` para lhe pedir o cliente na hora do uso. No api, que não lista a
+    extensão, ela não é inicializada: o processo sobe sem ``MONGO_URI`` e fica sem
+    cliente, sem o comando ``flask mongo`` e sem a sonda no health."""
+    sondas = '__import__("instrumentation.probes", fromlist=["_"]).registered_probes(app)'
+    estado = _montar_num_processo_a_parte(
+        "api",
+        f'"mongo" in app.extensions, "mongo" in app.cli.commands, sorted({sondas})',
+        **AMBIENTE_HTTP,
+    )
+
+    assert estado == "False False ['database', 'rabbitmq']"

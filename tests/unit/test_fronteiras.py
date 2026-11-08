@@ -115,7 +115,10 @@ def test_o_dominio_tem_folhas_para_conferir():
         "domain.ports",
         "domain.vin",
     }
-    assert {_nome_do_modulo(a) for a in PIPELINE} >= {"service.telemetry.ingest_service"}
+    assert {_nome_do_modulo(a) for a in PIPELINE} >= {
+        "service.telemetry.ingest_service",
+        "service.telemetry.bronze_read_service",
+    }
 
 
 @pytest.mark.parametrize("arquivo", FOLHAS_DO_DOMINIO, ids=_nome_do_modulo)
@@ -232,6 +235,9 @@ FORA_DO_CONSUMER = (
     "domain.models",
     "service.telemetry.ingest_",
     "messaging.publisher",
+    # O lado da silver: a leitura do bronze é do bronze-api.
+    "service.telemetry.bronze_read_service",
+    "repository.mongo.bronze_reader",
     "sqlalchemy",
     "flask_sqlalchemy",
     "flask_jwt_extended",
@@ -239,9 +245,9 @@ FORA_DO_CONSUMER = (
 
 #: O lado do producer no pipeline: a rota, o serviço e o publisher. O
 #: ``ext.container`` não é seguido: é a raiz de composição dos dois processos HTTP e
-#: vai montar também o leitor do bronze do ``bronze-api`` (passo 1.5). Quem decide o
-#: que cada processo conecta é o perfil (``EXTENSIONS``), e o ``test_composicao.py``
-#: confere o processo montado.
+#: monta também o leitor do bronze, do ``bronze-api``. Quem decide o que cada processo
+#: conecta é o perfil (``EXTENSIONS``), e o ``test_composicao.py`` confere o processo
+#: montado.
 PRODUCER = (
     "blueprint.restapi.v1.telemetry",
     "service.telemetry.ingest_service",
@@ -254,6 +260,24 @@ FORA_DO_PRODUCER = (
     "service.telemetry.bronze_",
     "messaging.consumer",
     "pymongo",
+)
+
+#: O lado da silver (o bronze-api): a rota de leitura, o serviço e o leitor. O
+#: ``ext.container`` não é seguido, pelo mesmo motivo do producer.
+SILVER = (
+    "blueprint.restapi.v1.bronze",
+    "service.telemetry.bronze_read_service",
+    "repository.mongo.bronze_reader",
+)
+FORA_DA_SILVER = (
+    "ext.rabbitmq",
+    "ext.consumer",
+    "messaging",
+    "pika",
+    "service.telemetry.ingest_",
+    "service.telemetry.bronze_ingest_service",
+    "service.telemetry.bronze_rules",
+    "repository.mongo.bronze_writer",
 )
 
 #: Cada pasta do repositório fica na sua tecnologia, e nenhuma sobe para o serviço.
@@ -335,6 +359,13 @@ def test_o_fecho_segue_os_imports_do_projeto():
         "messaging.connection",
         "ext.container",
     }
+    assert _fecho(SILVER, sem_seguir={"ext.container"}) >= {
+        "ext.auth",
+        "ext.mongo",
+        "repository.mongo.server",
+        "pymongo",
+        "ext.container",
+    }
 
 
 def test_o_consumer_nao_alcanca_o_lado_http_nem_o_sql():
@@ -350,6 +381,12 @@ def test_o_producer_nao_alcanca_o_bronze():
     """Falhou? O lado do producer passou a importar o Mongo ou o lado do consumer.
     A queda do Mongo derrubaria a ingestão, que só depende da fila."""
     assert _alcancados(_fecho(PRODUCER, sem_seguir={"ext.container"}), FORA_DO_PRODUCER) == []
+
+
+def test_a_leitura_da_silver_nao_alcanca_a_fila_nem_a_gravacao():
+    """Falhou? O lado da silver passou a importar o RabbitMQ ou o lado do consumer.
+    O bronze-api não conhece a fila: só lê o que o consumer já gravou."""
+    assert _alcancados(_fecho(SILVER, sem_seguir={"ext.container"}), FORA_DA_SILVER) == []
 
 
 @pytest.mark.parametrize("tecnologia", sorted(FORA_DA_TECNOLOGIA))

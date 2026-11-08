@@ -19,7 +19,7 @@ infraestrutura que não usa.
 import contextlib
 import os
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pika
@@ -27,7 +27,7 @@ import pytest
 from flask import Flask
 from sqlalchemy import event
 
-from domain.authz import Role
+from domain.authz import ANY_OWNER, Role
 from ext.config import PROCESS_ENVVAR, build_config
 
 DEFAULT_TEST_DATABASE_URI = "postgresql+psycopg://baseapi:baseapi@localhost:5432/baseapi_test"
@@ -70,7 +70,7 @@ from domain.contracts.telemetry_batch import (  # noqa: E402
     TelemetryBatchV1,
     TelemetryRecordV1,
 )
-from domain.ports import PublishFailed  # noqa: E402
+from domain.ports import BronzeEntry, BronzeUnavailable, PublishFailed  # noqa: E402
 from ext import mongo as ext_mongo  # noqa: E402
 from ext.database import db  # noqa: E402
 from messaging import topology  # noqa: E402
@@ -412,3 +412,71 @@ def fila_em_memoria():
     """Um ``FilaEmMemoria`` novo. Para a aplicação usá-lo, veja a fixture ``fila``
     de ``tests/test_telemetry.py``."""
     return FilaEmMemoria()
+
+
+class LeituraEmMemoria:
+    """Dublê do ``BronzeReader``, com a semântica do adaptador: a ordem
+    ``(ingested_at, record_id)``, o começo estritamente depois da posição, o limite
+    superior inclusivo e o filtro do escopo de dono.
+
+    ``agora`` é a hora do servidor (com milissegundos, como a data BSON); ``gravar``
+    guarda um registro gravado há tantos segundos; ``fora`` faz o bronze falhar como
+    o Mongo fora do ar; ``chamadas`` guarda os argumentos de cada leitura.
+    """
+
+    def __init__(self) -> None:
+        self.agora = datetime.now(UTC).replace(microsecond=482000)
+        self.registros: list[BronzeEntry] = []
+        self.chamadas: list[dict] = []
+        self.fora = False
+
+    def gravar(self, ingerido_ha: float, *, user_id: int = 51) -> BronzeEntry:
+        ingested_at = self.agora - timedelta(seconds=ingerido_ha)
+        record_id = uuid4()
+        registro = BronzeEntry(
+            record_id=record_id,
+            vin="93YBSR7RHEJ298116",
+            vehicle_id=7,
+            user_id=user_id,
+            sender_relation="owner",
+            payload_user_matches_sender=True,
+            collected_at=ingested_at - timedelta(minutes=2),
+            available_metrics=("rpm",),
+            received_at=ingested_at - timedelta(seconds=1),
+            ingested_at=ingested_at,
+            message_id=uuid4(),
+            request_id="req-do-teste",
+            schema_version=1,
+            raw={"id": str(record_id), "readings": [{"metric": "rpm", "value": 1065.0}]},
+        )
+        self.registros.append(registro)
+        return registro
+
+    def server_time(self) -> datetime:
+        if self.fora:
+            raise BronzeUnavailable("Mongo fora do ar (dublê)")
+        return self.agora
+
+    def read_after(self, after, *, until, limit, owner_scope) -> list[BronzeEntry]:
+        if self.fora:
+            raise BronzeUnavailable("Mongo fora do ar (dublê)")
+        self.chamadas.append({"after": after, "until": until, "limit": limit, "dono": owner_scope})
+
+        def ordem(registro: BronzeEntry):
+            return (registro.ingested_at, str(registro.record_id))
+
+        depois = [
+            registro
+            for registro in self.registros
+            if ordem(registro) > (after.ingested_at, str(after.record_id))
+            and registro.ingested_at <= until
+            and (owner_scope is ANY_OWNER or registro.user_id == owner_scope)
+        ]
+        return sorted(depois, key=ordem)[:limit]
+
+
+@pytest.fixture
+def leitura_em_memoria():
+    """Um ``LeituraEmMemoria`` novo, sem registros. Para a aplicação usá-lo, veja a
+    fixture ``bronze`` de ``tests/test_bronze_api.py``."""
+    return LeituraEmMemoria()

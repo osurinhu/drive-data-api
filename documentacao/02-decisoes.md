@@ -308,7 +308,8 @@ adaptadores é o container. As regras puras (a partição, o indicador do `user`
 adaptador.
 O lado do consumer segue o mesmo molde: o `BronzeIngestService` recebe o bronze
 (`BronzeWriter`) pelo construtor, e a montagem do documento de cada registro fica em
-`bronze_rules.py`.
+`bronze_rules.py`. O da silver também: o `BronzeReadService` recebe o leitor
+(`BronzeReader`) e a janela (`settle_seconds`).
 **Por quê:** cada regra se testa com dublês em memória (`tests/unit/test_ingestao.py`,
 `tests/unit/test_gravacao_bronze.py`), e o consumer importa o lado dele sem carregar o do
 producer.
@@ -364,7 +365,8 @@ producer (`vehicle_id`, `user_id`, `sender_relation`), as datas, os ids de corre
 versão do contrato e `available_metrics` (as métricas com leitura disponível, para o filtro da
 silver). Os ids são texto e as datas, `Date` do BSON (precisão de milissegundos).
 O `ingested_at` vem do relógio do Mongo (`hello.localTime`), lido uma vez por tentativa de
-gravação do lote: o cursor da silver (Fase 1.5) compara datas de um relógio só.
+gravação do lote: o cursor da silver compara datas de um relógio só (ver "A silver lê o bronze
+por cursor", abaixo).
 A escrita usa `w="majority", j=True`: o registro que o consumer confirmou ao broker não some
 numa troca de primário. Cada operação tem prazo (`BRONZE_WRITE_TIMEOUT_SECONDS`, com
 `pymongo.timeout`), bem abaixo de dois heartbeats do AMQP. Dentro dele, a espera por um
@@ -374,7 +376,8 @@ A falha da infraestrutura vira `BronzeUnavailable`, a falha transitória: o serv
 eleição ou sem resposta no prazo (`ConnectionFailure` e os erros de prazo), a escrita sem a
 confirmação da maioria (`writeConcernError`) e a recusa que vem da configuração, a credencial
 (código 18) ou a permissão (13). Todas atingem qualquer lote. Qualquer outro erro do Mongo sobe
-como está, e o consumer o trata como bug.
+como está, e o consumer o trata como bug. O prazo e essa classificação moram em
+`repository/mongo/server.py`, que o leitor da silver também usa.
 **Por quê:** o RabbitMQ entrega *at-least-once*, e o app reenvia o lote inteiro quando não
 recebe o 202. O índice único do `_id` é o que torna as duas repetições seguras.
 **Ainda não (Fase 4):** distinguir o duplicado (mesmo remetente) da colisão de `id` (outro
@@ -426,6 +429,58 @@ da fatia (o consumer parado, a fila acumula; de volta, ela drena). A reconexão 
 processo, com o servidor de saúde em :8081, é da Fase 5.
 **Custo aceito:** até a Fase 5, o consumer não tem healthcheck no compose, e um broker que cai
 e volta custa um reinício do processo.
+
+### A silver lê o bronze por cursor, com uma janela de estabilização e um relógio só
+O `bronze-api` serve `GET /bronze/records`, que exige `bronze:ler` (escopo
+`bronze:ler-de-todos`). A ordem é `(ingestion.ingested_at, _id)`, e a página começa
+estritamente depois da posição do cursor. O `BronzeReadService`:
+
+1. lê a hora do servidor do bronze e tira dela a janela (`BRONZE_SETTLE_SECONDS`, 30 s): é o
+   limite superior da leitura, o `watermark` da resposta;
+2. pede `limit + 1` registros depois da posição e até o limite;
+3. devolve `limit` deles. `has_more` diz se veio o extra, e o `next_cursor` aponta para o último
+   item, ou repete a posição recebida (ou o começo) na página vazia: a silver nunca fica sem
+   cursor.
+
+O cursor é opaco: base64url de `{"v": 1, "t": <ms>, "id": "<record_id>"}`. É representação
+HTTP, e por isso o codec mora em `schemas/bronze_schema.py`; o serviço só conhece a
+`BronzePosition` (`domain/ports.py`). Cursor que a API não emitiu é 422 ("Cursor inválido."),
+sem explicar o formato. O `limit` vai de 1 a 1000 (500 por padrão), constantes do schema. A
+página não traz total (`CursorPage`, em `service/pagination.py`): a coleção cresce enquanto é
+lida, e um total custaria uma contagem por chamada sem significado estável.
+**Por que não repete:** a posição `(ingested_at, _id)` é única (o `_id` desempata o mesmo
+milissegundo) e a comparação é estrita.
+**Por que não perde:** o `ingested_at` vem do relógio do Mongo, o mesmo que dá o limite
+superior, e é lido de novo a cada tentativa de gravação (ver "A gravação no bronze é
+idempotente"). Nenhum registro recebe um carimbo abaixo do limite depois de a silver ter lido
+até ele, desde que entre carimbar e a gravação ficar visível passe menos que a janela. A
+gravação confirmada pela maioria fica visível em milissegundos; o prazo de gravação
+(`BRONZE_WRITE_TIMEOUT_SECONDS`, 10 s) cabe com folga nos 30 s. A leitura usa
+`readConcern: majority`, o par do `w: majority` do writer: a silver não lê o que uma troca de
+primário desfaria.
+**Protocolo da silver:** chamar com o cursor guardado, processar a página e só então guardar o
+`next_cursor`; com `has_more`, chamar de novo em seguida, e sem ele, esperar o intervalo de
+polling. A entrega é *at-least-once* do lado dela (uma queda entre processar e guardar repete
+a página), então ela deduplica por `record_id`. Para reler tudo, basta não mandar cursor.
+Com o bronze fora, a resposta é 503, sem `Retry-After`: a silver repete no próprio intervalo,
+com o mesmo cursor. Cada leitura faz duas operações no Mongo (a hora e a página), cada uma com
+prazo de `BRONZE_READ_TIMEOUT_SECONDS` (5 s).
+A consulta põe o intervalo inteiro no primeiro campo do `ix_ingested` e deixa o desempate
+para um `$or` que o próprio índice resolve. O `tests/mongo/test_bronze_reader.py` confere,
+pelo `explain`, que a página sai do índice sem ordenar em memória.
+**Descartado:** a paginação por número de página do `get_page` (uma contagem por chamada, e a
+página muda de conteúdo quando entra registro novo antes dela); uma marca d'água só por tempo
+(perde ou repete os empates do milissegundo e a gravação atrasada); o `_id` sozinho como
+cursor (o UUID do app não tem ordem de gravação); change streams (exigem replica set e janela
+de oplog, e não combinam com HTTP); marcar no bronze o que a silver já leu (o bronze é
+imutável e compartilhado, e a silver ganharia permissão de escrita); o relógio do processo
+para o carimbo ou para o limite (consumers e `bronze-api` em hosts diferentes).
+**Custo aceito:** a silver vê cada registro uns 30 s depois de ele chegar ao bronze. Num
+failover do replica set, o relógio do novo primário pode diferir do antigo; a premissa da
+janela vira alerta na Fase 6 (`bronze_stamp_age_seconds`).
+**Ainda não (Fase 4):** os filtros (`vin`, `metric`, `collected_from`/`collected_to`,
+`ingested_from`) e o cursor amarrado a eles. O cursor de hoje (v1) continuará aceito, como a
+leitura sem filtro: a silver não precisa reler o bronze quando os filtros chegarem.
 
 ---
 
@@ -504,6 +559,19 @@ ao cliente algo sobre o que ele não pode agir.
 **Descartado:** passar o usuário no construtor do serviço (como num dos projetos de
 origem) — incompatível com um container de DI, que cria fábricas sem contexto de
 requisição.
+
+### A sentinela `ANY_OWNER` mora no domínio, em `domain/authz.py`
+`AnyOwner`, `ANY_OWNER` e o tipo `OwnerScope` são vocabulário da autorização, e moram com ele
+na folha `domain/authz.py`. O `ext.auth` os concede (`current_owner_scope`), o `BaseService`
+os aplica, e o pipeline também os recebe: a leitura do bronze pela silver passa o escopo até a
+porta (`BronzeReader.read_after(..., owner_scope=...)`), e o adaptador só filtra pelo
+remetente quando o escopo é um id.
+**Por quê:** o pipeline não importa o `BaseService`, que traz o SQLAlchemy e o repositório SQL
+(`tests/unit/test_fronteiras.py` reprova). Com a sentinela numa folha, o serviço da silver
+segue a regra do escopo explícito e sem padrão como o CRUD.
+**Descartado:** o pipeline receber `user_id: int | None`, com `None` querendo dizer "de
+todos": seria o default "sem filtro" que a decisão acima evita, e um segundo vocabulário para
+a mesma coisa; liberar o `service.base_service` no pipeline.
 
 ### Claim `sub` do JWT só com o id, em string
 Exigência da RFC 7519, e versões recentes do Flask-JWT-Extended rejeitam outro formato. O

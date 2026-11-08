@@ -6,10 +6,10 @@ dono é irrelevante e as chamadas internas passam ``ANY_OWNER``.
 
 from werkzeug.security import generate_password_hash
 
-from domain.authz import Role
+from domain.authz import ANY_OWNER, Role
 from domain.models import User
 from repository.sql.user_repository import UserRepository
-from service.base_service import ANY_OWNER, BaseService
+from service.base_service import BaseService
 from service.errors import BusinessRuleError, NotFoundError
 
 MIN_PASSWORD_LENGTH = 8

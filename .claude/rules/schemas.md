@@ -18,7 +18,12 @@ faz `auth_schema.py`, e `domain.vin`), nunca o ORM (`domain.models`). Molde: `ap
   vez de 422 — e a coluna não pode ser importada daqui.
 - O schema de saída é a única fonte do que sai: campo fora dele não aparece. Não use `dump_only`
   nele (nunca é usado em `@blp.arguments`). Nunca exponha `password`.
-- Limites de paginação moram em `pagination_schema.py`, não no `settings.toml`.
+- Limites de paginação moram no schema, não no `settings.toml`: em `pagination_schema.py`, e os
+  da leitura do bronze (`DEFAULT_LIMIT`, `MAX_LIMIT`) em `bronze_schema.py`.
 - `PageSchema` e `service.pagination.Page` descrevem o mesmo envelope, e `ApiErrorSchema` documenta
-  o de erro: `test_contracts.py` reprova se divergirem.
+  o de erro: `test_contracts.py` reprova se divergirem. O mesmo vale para o `BronzePageSchema` e o
+  `CursorPage` da leitura da silver.
+- Representação HTTP de um valor do domínio (o cursor opaco da silver ↔ `BronzePosition`) é um
+  campo do marshmallow no schema (`CursorField`, em `bronze_schema.py`): o serviço recebe e
+  devolve o valor do domínio, e a mensagem do erro não explica o formato (o cursor é opaco).
 - O mypy cobre esta camada.
