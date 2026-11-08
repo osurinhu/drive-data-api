@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 _SCHEMES = ("amqp://", "amqps://")
 
+#: O tipo dos parâmetros, para quem fora de ``messaging`` os anota sem importar o pika.
+AmqpParameters = pika.URLParameters
+
 
 def connection_parameters(
     url: str, *, timeout: float, heartbeat: int, connection_name: str
@@ -69,9 +72,9 @@ def broker_reachable(parameters: pika.ConnectionParameters) -> bool:
 def describe_error(error: BaseException) -> str:
     """Tipo e motivo de um erro do pika, para log.
 
-    O ``AMQPConnectionError`` tem ``str()`` vazio: o motivo (conexão recusada,
-    prazo esgotado) fica nos ``args``, como o erro de socket de cada tentativa.
+    O ``AMQPConnectionError`` tem ``str()`` vazio: o motivo (conexão recusada, prazo
+    esgotado) fica nos ``args``, num erro interno do pika que só o ``repr()`` mostra.
     Nenhum dos dois leva a credencial da URL.
     """
-    motivo = str(error) or ", ".join(str(arg) for arg in error.args)
+    motivo = str(error) or ", ".join(repr(arg) for arg in error.args)
     return f"{type(error).__name__}: {motivo}"

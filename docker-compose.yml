@@ -200,8 +200,8 @@ services:
     ports:
       - "5001:5000"
 
-  # Consumer: drena a fila para o bronze (`flask consumer run`). Não tem HTTP nem
-  # porta publicada, então escala em réplicas, como consumidores concorrentes da
+  # Consumer: drena a fila para o bronze (`flask consumer run`). A porta de saúde
+  # (:8081) não é publicada, então escala em réplicas, como consumidores concorrentes da
   # mesma fila: docker compose up -d --scale consumer=3. Parado, nada se perde: a
   # fila acumula, o api continua respondendo 202, e ele drena o acúmulo quando volta.
   consumer:
@@ -220,6 +220,18 @@ services:
       FLASK_AMQP_URL: >-
         amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
     command: ["flask", "consumer", "run"]
+    healthcheck:
+      # Pronto: conectado, consumindo e com o Mongo respondendo. Sem o Mongo ou o
+      # broker ele fica "unhealthy" e de pé, e volta sozinho quando eles voltam.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8081/health/ready')
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   # Suíte de testes. Sob `profiles`, então NÃO sobe junto com `docker compose up`.
   # Uso: docker compose run --rm test

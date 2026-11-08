@@ -17,6 +17,9 @@ Uma conexão e um canal, com ``prefetch`` mensagens em voo e ack manual. ``stop(
 pode ser chamado de um handler de sinal, porque só levanta uma marca: o laço
 termina a mensagem corrente, devolve as outras à fila com ``nack`` (que não conta
 como falha) e fecha.
+
+Conexão que cai não encerra o processo: ``run_until_stopped`` reconecta, com a mesma
+espera crescente, e o que estava em voo volta para a fila.
 """
 
 import contextlib
@@ -71,10 +74,46 @@ class RabbitTelemetryConsumer:
         self._failures = 0
         self._last_activity = 0.0
         self._connection: pika.BlockingConnection | None = None
+        #: Lido pela thread do health: valor simples, sem lock.
+        self._consuming = False
+        self._subscribed_at: float | None = None
 
     def stop(self) -> None:
         """Pede o fim do consumo. Seguro num handler de sinal."""
         self._stopping = True
+
+    def is_consuming(self) -> bool:
+        """Conectado ao broker e inscrito na fila."""
+        return self._consuming
+
+    def run_until_stopped(self) -> None:
+        """Consome até ``stop()``, reconectando quando o broker cai ou recusa.
+
+        A espera dobra a cada tentativa e só volta ao começo depois de uma conexão que
+        ficou de pé por ``retry_max`` segundos. Numa conexão instável, cada queda com
+        mensagens em voo conta para o ``delivery-limit``, e reconectar sem espera
+        mandaria mensagens boas para a DLQ.
+        """
+        attempts = 0
+        while not self._stopping:
+            self._subscribed_at = None
+            try:
+                self.run()
+            except ConsumerFailed as error:
+                attempts = 1 if self._connection_was_stable() else attempts + 1
+                delay = self._delay(attempts)
+                logger.warning("Consumo interrompido (%s); nova conexão em %.1f s.", error, delay)
+                self._wait_disconnected(delay)
+
+    def _connection_was_stable(self) -> bool:
+        started = self._subscribed_at
+        return started is not None and time.monotonic() - started >= self._retry_max
+
+    def _wait_disconnected(self, delay: float) -> None:
+        """Sem conexão não há heartbeat a atender: o ``time.sleep`` serve aqui."""
+        deadline = time.monotonic() + delay
+        while not self._stopping and (remaining := deadline - time.monotonic()) > 0:
+            time.sleep(min(0.5, remaining))
 
     def run(self, *, idle_timeout: float | None = None) -> None:
         """Consome até ``stop()``. Com ``idle_timeout``, para também depois de tantos
@@ -91,14 +130,18 @@ class RabbitTelemetryConsumer:
             channel = connection.channel()
             channel.basic_qos(prefetch_count=self._prefetch)
             consumer_tag = channel.basic_consume(QUEUE, self._on_message, auto_ack=False)
+            self._consuming = True
+            self._subscribed_at = time.monotonic()
             self._last_activity = time.monotonic()
             while not self._stopping and not self._idle(idle_timeout):
                 connection.process_data_events(time_limit=tick)
-            # O pika devolve com nack o que já chegou e não foi entregue ao handler.
+            # O que já chegou passou pelo `_on_message`. Só o que chegar durante o
+            # cancelamento o pika devolve sozinho, com `reject`, e aquela entrega conta.
             channel.basic_cancel(consumer_tag)
         except (AMQPError, OSError) as error:
             raise ConsumerFailed(describe_error(error)) from error
         finally:
+            self._consuming = False
             self._connection = None
             if connection.is_open:
                 with contextlib.suppress(AMQPError, OSError):
@@ -158,7 +201,7 @@ class RabbitTelemetryConsumer:
         """Espera antes da próxima mensagem, sem perder o heartbeat: ``connection.sleep``
         continua atendendo o broker, e o ``time.sleep`` deixaria a conexão cair."""
         self._failures += 1
-        delay = min(self._retry_max, self._retry_initial * 2 ** min(self._failures - 1, 16))
+        delay = self._delay(self._failures)
         logger.warning(
             "Bronze indisponível (%s): o lote %s volta para a fila; nova tentativa em %.1f s.",
             error,
@@ -169,3 +212,6 @@ class RabbitTelemetryConsumer:
         deadline = time.monotonic() + delay
         while not self._stopping and (remaining := deadline - time.monotonic()) > 0:
             self._connection.sleep(min(1.0, remaining))
+
+    def _delay(self, failures: int) -> float:
+        return min(self._retry_max, self._retry_initial * 2 ** min(failures - 1, 16))

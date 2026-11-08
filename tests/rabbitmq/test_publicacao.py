@@ -1,5 +1,7 @@
 """A topologia e o publisher da telemetria contra o RabbitMQ de verdade (vhost de testes)."""
 
+import time
+
 import pytest
 from pika.exceptions import StreamLostError
 
@@ -25,9 +27,13 @@ def publicador(amqp_url):
 # --- Topologia --------------------------------------------------------------------
 
 
-def test_aplicar_a_topologia_de_novo_nao_muda_nada(amqp_management, amqp_topology, delivery_limit):
+def test_aplicar_a_topologia_de_novo_nao_muda_nada(
+    amqp_management, amqp_topology, delivery_limit, queue_max_bytes
+):
     """O setup roda a cada `docker compose up`: aplicar sobre o que existe é um no-op."""
-    topology.apply(amqp_management, amqp_topology, delivery_limit=delivery_limit)
+    topology.apply(
+        amqp_management, amqp_topology, delivery_limit=delivery_limit, max_bytes=queue_max_bytes
+    )
 
 
 def test_a_fila_e_quorum(amqp_management, amqp_topology):
@@ -82,6 +88,37 @@ def test_sem_fila_para_a_routing_key_a_publicacao_falha(
         publicador.publish(novo_lote())
 
     assert bronze_queue() == []
+
+
+def test_fila_cheia_recusa_a_publicacao_e_vira_publish_failed(
+    publicador,
+    bronze_queue,
+    novo_lote,
+    amqp_management,
+    amqp_topology,
+    delivery_limit,
+    queue_max_bytes,
+):
+    """A contrapressão: com o teto da policy estourado, o broker responde com ``nack``,
+    e o producer devolve 503 em vez de perder o lote. A policy se aplica à fila logo
+    depois do PUT, e a recusa vale a partir da publicação seguinte: daí o laço."""
+    topology.apply(amqp_management, amqp_topology, delivery_limit=delivery_limit, max_bytes=1)
+    try:
+        prazo = time.monotonic() + 10
+        with pytest.raises(PublishFailed, match="NackError"):
+            while time.monotonic() < prazo:
+                publicador.publish(novo_lote())
+                time.sleep(0.1)
+    finally:
+        topology.apply(
+            amqp_management,
+            amqp_topology,
+            delivery_limit=delivery_limit,
+            max_bytes=queue_max_bytes,
+        )
+
+    # Recusar o novo não apaga o que a fila já aceitou.
+    assert len(bronze_queue(minimo=1)) >= 1
 
 
 def test_broker_fora_do_ar_vira_publish_failed(novo_lote):

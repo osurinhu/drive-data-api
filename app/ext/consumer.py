@@ -8,6 +8,9 @@ O comando roda até receber SIGTERM (o ``docker compose stop``) ou SIGINT (Ctrl+
 o sinal só pede a parada, e o consumidor termina a mensagem corrente antes de
 fechar. No container, o processo é o PID 1, que o kernel não deixa morrer pelo
 SIGTERM sem um handler: sem ele, o ``stop`` esperaria os 10 s e mataria.
+
+Enquanto consome, o processo responde, em ``CONSUMER_HEALTH_PORT``, se está vivo e pronto. O
+broker fora não o encerra: ele fica de pé, não pronto, e reconecta.
 """
 
 import signal
@@ -17,7 +20,8 @@ import click
 from flask import Flask, current_app
 from flask.cli import AppGroup
 
-from messaging.consumer import ConsumerFailed
+from instrumentation.consumer_health import ConsumerHealthServer
+from instrumentation.probes import registered_probes
 
 consumer_cli = AppGroup("consumer", help="O consumer da fila da telemetria.")
 
@@ -33,12 +37,22 @@ def run_command() -> None:
     for sinal in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sinal, _parar)
 
+    port = int(current_app.config["CONSUMER_HEALTH_PORT"])
+    health = ConsumerHealthServer(
+        port,
+        consuming=consumer.is_consuming,
+        bronze_ok=registered_probes(current_app)["mongo"],
+    )
+    try:
+        health.start()
+    except OSError as error:
+        raise click.ClickException(f"a porta de saúde {port} não abriu: {error}") from error
+
     click.echo("Consumindo a fila bronze.telemetry (SIGTERM ou Ctrl+C para parar)...")
     try:
-        consumer.run()
-    except ConsumerFailed as error:
-        # Sai com erro: no compose, o `restart` sobe o processo de novo.
-        raise click.ClickException(f"o consumo parou: {error}") from error
+        consumer.run_until_stopped()
+    finally:
+        health.stop()
     click.echo("Consumer parado.")
 
 

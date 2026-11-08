@@ -24,9 +24,9 @@ Decisões em 02-decisoes, seções Operação e Qualidade; o runbook é o `READM
   container avulso (o do `/smoke-api`) migrar sozinho. O `setup` também aplica a topologia
   (`flask rabbitmq setup`) e os índices do bronze (`flask mongo setup`), e espera o broker e o
   Mongo saudáveis.
-- O `consumer` não tem porta nem healthcheck (a sonda HTTP em :8081 é da Fase 5) e usa
-  `restart: unless-stopped`: quando o broker cai, o processo sai com 1 e o compose o sobe de
-  novo. Ele trata SIGTERM (é o PID 1): o `docker compose stop consumer` termina a mensagem
+- O `consumer` não publica porta (escala em réplicas). O healthcheck do compose roda dentro do
+  container, em `:8081/health/ready`. Sem o broker ou o Mongo ele fica `unhealthy`, de pé, e volta
+  sozinho. Ele trata SIGTERM (é o PID 1): o `docker compose stop consumer` termina a mensagem
   corrente e devolve as outras à fila.
 - RabbitMQ: o `hostname` é fixo porque o nó (`rabbit@<hostname>`) é a chave dos dados no volume.
   O healthcheck roda como `gosu rabbitmq ...`, no compose e no CI. Como root, o CLI cria um

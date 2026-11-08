@@ -20,8 +20,9 @@ destino de cada mensagem" e "Parada e queda".
   `pika.URLParameters` por conta própria.
 - A `BlockingConnection` não é segura entre threads e só atende o heartbeat quando é usada: uma
   por processo, criada depois do fork (o `_pid` a descarta no filho), e um `threading.Lock` em
-  volta do uso. Espera longa usa `connection.sleep()`, nunca `time.sleep()`, que deixaria o
-  broker derrubar a conexão por falta de heartbeat.
+  volta do uso. Espera longa com a conexão aberta usa `connection.sleep()`, nunca `time.sleep()`,
+  que deixaria o broker derrubar a conexão por falta de heartbeat. Sem conexão (a espera da
+  reconexão), não há heartbeat a atender.
 - Publicador (`publisher.py`): canal com `confirm_delivery()`, `mandatory=True` e mensagem
   persistente; exchange, routing key e corpo vêm do contrato (`encode`), nunca escritos aqui.
   `NackError` e `UnroutableError` não se repetem (o broker respondeu). Erro de conexão se repete
@@ -37,13 +38,19 @@ destino de cada mensagem" e "Parada e queda".
     pendente contam;
   - outra exceção → `basic_reject(requeue=True)`, que conta: passado o limite, a DLQ.
   Nunca feche o canal ou a conexão para "devolver" mensagens numa falha transitória: conta como
-  falha.
+  falha. O `basic_cancel` também não serve para pausar: o pika devolve o que chega nele com
+  `reject`, que conta.
 - O `stop()` só levanta uma marca (é chamado de handler de sinal). O laço roda
   `process_data_events` em fatias de 1 s, a pausa usa `connection.sleep` em fatias de 1 s, e as
-  duas olham a marca. Falha do broker sai como `ConsumerFailed`, nunca como exceção do pika.
+  duas olham a marca. Falha do broker sai do `run` como `ConsumerFailed`, nunca como exceção do
+  pika, e o `run_until_stopped` (o do processo) reconecta com espera crescente. O `is_consuming`
+  é lido pela thread do health: só valor simples, nunca a conexão.
+- DLQ (`dead_letters.py`): só `nack` para devolver, e a policy própria desliga o limite de
+  entregas (sem DLX, o padrão do quorum faria a mensagem sumir). Na republicação, o `basic_ack` vem
+  depois da confirmação do broker.
 - Topologia: declarada só em `topology.py` (`apply`), e aplicada pelo `flask rabbitmq setup` e
   pela fixture `amqp_topology`. Producer e consumer nunca declaram exchange nem fila. Argumento
-  de fila é imutável: o que pode mudar (DLX, limites) vai pela policy `bronze-telemetry`. O
+  de fila é imutável: o que pode mudar (DLX, limites, o teto em bytes) vai pela policy `bronze-telemetry`. O
   `dead-letter-strategy: at-least-once` exige `overflow: reject-publish`; sem ele, o RabbitMQ
   volta ao at-most-once calado.
 - Log e mensagem de erro nunca repetem a URL, porque ela leva a senha. O erro do pika vai para o

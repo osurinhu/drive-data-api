@@ -143,6 +143,34 @@ def test_parar_termina_o_lote_corrente_e_devolve_os_outros_sem_contar_falha(
     assert all((p.headers or {}).get("x-delivery-count", 0) == 0 for p, _ in restantes)
 
 
+def test_o_consumidor_se_declara_consumindo_so_enquanto_inscrito(consumidor, publicar, novo_lote):
+    publicar(encode(novo_lote()))
+    durante = []
+    consumer = consumidor(lambda _batch: durante.append(consumer.is_consuming()))
+    assert consumer.is_consuming() is False
+
+    consumer.run(idle_timeout=1)
+
+    assert durante == [True]
+    assert consumer.is_consuming() is False
+
+
+def test_run_until_stopped_consome_e_volta_no_stop(consumidor, publicar, novo_lote):
+    lote = novo_lote()
+    publicar(encode(lote))
+    gravados = []
+
+    def grava_e_para(batch):
+        gravados.append(batch)
+        consumer.stop()
+
+    consumer = consumidor(grava_e_para)
+
+    consumer.run_until_stopped()
+
+    assert gravados == [lote]
+
+
 def test_broker_fora_do_ar_vira_consumer_failed():
     consumer = RabbitTelemetryConsumer(
         PORTA_FECHADA,

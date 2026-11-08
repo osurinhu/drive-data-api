@@ -99,8 +99,8 @@ E a infraestrutura, fora do caminho da requisição:
 |---|---|
 | `app/ext/` | Extensões. **Cada módulo expõe exatamente uma função `init_app(app)`** — é essa convenção que permite o carregador tratá-las de forma uniforme. |
 | `app/blueprint/http_errors.py` | Envelope de erro e o mapa exceção → status HTTP. Mora na camada HTTP, fora de `ext/`, porque é usado por duas extensões diferentes e pelas rotas; se morasse numa extensão, a outra passaria a depender dela. |
-| `app/instrumentation/` | Peças de observação usadas por mais de uma extensão: o registro das sondas do health (`probes.py`; cada extensão que conecta um serviço registra a sua, e a rota do health executa as registradas) e o id da requisição (`request_context.py`), que vai para o log e para o envelope de erro. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
-| `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika), o cliente da API de gerenciamento (`management.py`, só stdlib), a topologia (`topology.py`: fila, DLX, DLQ e a policy), o publisher dos lotes (`publisher.py`), que implementa a porta `TelemetryPublisher`, e o consumer da fila (`consumer.py`), que decodifica pelo contrato, entrega o lote a um handler e decide o destino de cada mensagem (ack, DLQ, de volta à fila). Recebe URL, prazos e o handler de quem chama e não importa `ext`, `repository`, `service` nem `blueprint`. |
+| `app/instrumentation/` | O servidor de saúde do consumer (`consumer_health.py`, só com a stdlib) e as peças de observação usadas por mais de uma extensão: o registro das sondas do health (`probes.py`; cada extensão que conecta um serviço registra a sua, e a rota do health executa as registradas) e o id da requisição (`request_context.py`), que vai para o log e para o envelope de erro. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
+| `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika), o cliente da API de gerenciamento (`management.py`, só stdlib), a topologia (`topology.py`: fila, DLX, DLQ e a policy), a operação da DLQ (`dead_letters.py`), o publisher dos lotes (`publisher.py`), que implementa a porta `TelemetryPublisher`, e o consumer da fila (`consumer.py`), que decodifica pelo contrato, entrega o lote a um handler e decide o destino de cada mensagem (ack, DLQ, de volta à fila). Recebe URL, prazos e o handler de quem chama e não importa `ext`, `repository`, `service` nem `blueprint`. |
 
 ---
 
@@ -119,11 +119,11 @@ instrumentation  →  (nada do projeto)
 ```
 
 As extensões são a raiz de composição e importam das camadas o que precisam montar. Duas
-peças novas são importadas quase só por elas: `instrumentation/`, por qualquer extensão, pela
+peças novas são importadas quase só por elas: `instrumentation/`, por qualquer extensão (o `ext.consumer` usa o servidor de saúde), pela
 rota do health, pelo envelope de erro (`blueprint/http_errors.py`, que lê o id da
 requisição) e pela rota de telemetria (que põe o id no envelope da fila), e `messaging/`, pelo
-`ext.rabbitmq` (a sonda e os comandos), pelo `ext.container` (o publisher), pelo
-`ext.consumer_container` (o consumer) e pelo `ext.consumer` (o erro que encerra o comando).
+`ext.rabbitmq` (a sonda e os comandos), pelo `ext.container` (o publisher) e pelo
+`ext.consumer_container` (o consumer).
 
 Quando a extensão importa `blueprint.http_errors`, a dependência entre os dois pacotes corre
 nos dois sentidos (a rota importa `ext.auth`, que importa `blueprint.http_errors`). Ela fica sem
@@ -347,21 +347,25 @@ app/
   instrumentation/
     probes.py                registro das sondas do health
     request_context.py       id da requisição
+    consumer_health.py       servidor de saúde do consumer (/health/live e /health/ready)
   messaging/                 RabbitMQ
     connection.py            parâmetros de conexão (pika) + sonda do broker
     management.py            cliente da API de gerenciamento (vhosts, permissões, filas, policies)
     topology.py              exchanges, fila, DLX, DLQ, bindings e a policy (aplicados pelo setup)
     publisher.py             publicação dos lotes com confirmação (porta TelemetryPublisher)
-    consumer.py              consumo da fila: prefetch, ack manual, DLQ, pausa com backoff
+    consumer.py              consumo da fila: prefetch, ack manual, DLQ, pausa e reconexão com backoff
+    dead_letters.py          listar e republicar a DLQ (comandos de operação)
   ext/
     config.py                Dynaconf + perfil do processo + carregador dinâmico de módulos
     database.py              instância do SQLAlchemy + sonda do banco
     mongo.py                 cliente do Mongo (sem conexão até o primeiro uso; um por processo)
                              + sonda + `flask mongo setup` (os índices do bronze)
-    rabbitmq.py              configuração AMQP validada na subida + sonda + `flask rabbitmq setup`
+    rabbitmq.py              configuração AMQP validada na subida + sonda + `flask rabbitmq`
+                             (`setup`, `dlq-list`, `dlq-requeue`)
     container.py             container de injeção de dependência dos processos HTTP
     consumer_container.py    container do consumer (app.consumer_container)
-    consumer.py              `flask consumer run`, que para com SIGTERM ou Ctrl+C
+    consumer.py              `flask consumer run`, que para com SIGTERM ou Ctrl+C e responde
+                             a saúde em :8081
     api.py                   flask-smorest + blueprint /api/v1 + segurança global
     auth.py                  JWT, decorator de permissão, escopo de ownership
     observability.py         request id + nível de log

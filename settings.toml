@@ -94,11 +94,21 @@ AMQP_PREFETCH = 20
 # `flask rabbitmq setup`: mudar aqui exige rodar o setup de novo. A falha transitória
 # (o bronze fora) não conta.
 AMQP_DELIVERY_LIMIT = 10
+# O teto da fila em bytes (2 GiB), a contrapressão: cheia, o broker recusa a publicação
+# (`overflow = reject-publish`), e o envio de lote responde 503 com Retry-After. Também
+# vai na policy: mudar aqui exige rodar o setup de novo.
+AMQP_QUEUE_MAX_BYTES = 2147483648
 # A API de gerenciamento (http://usuario:senha@host:15672), por onde o job setup
 # aplica a topologia (`flask rabbitmq setup`). Vem de FLASK_AMQP_MANAGEMENT_URL, e só
 # o setup a recebe: os processos que publicam ou consomem não têm a credencial de
 # operação.
 AMQP_MANAGEMENT_URL = ""
+
+# --- Consumer -----------------------------------------------------------------
+# A porta do servidor de saúde do consumer (/health/live e /health/ready). Não é
+# publicada no host: o healthcheck roda dentro do container, e as réplicas não disputam
+# porta.
+CONSUMER_HEALTH_PORT = 8081
 
 # --- Ingestão de telemetria (producer) ----------------------------------------
 # O Retry-After do 503 quando a fila não confirma o lote: o app guarda o lote e

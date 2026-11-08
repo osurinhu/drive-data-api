@@ -1,6 +1,6 @@
 ---
 name: smoke-pipeline
-description: Sobe o pipeline de telemetria inteiro com os processos reais — db, mongo, rabbitmq, o job setup, o api, o bronze-api e o consumer, na imagem de produção com o código atual — num projeto do compose à parte, com volumes descartáveis e sem porta no host, e o confere de ponta a ponta por HTTP — o health de cada processo, a matriz da leitura do bronze (401, 403, 404, 422), o lote que vai do app à silver sem perda, o reenvio sem repetição e a página vazia com o mesmo cursor. Use depois de mudar qualquer peça do caminho app → producer → fila → consumer → bronze → bronze-api (rotas de telemetria e do bronze, serviços de service/telemetry, messaging, repository/mongo, perfis do settings.toml, compose, Dockerfile) e antes de concluir um passo do pipeline.
+description: Sobe o pipeline de telemetria inteiro com os processos reais — db, mongo, rabbitmq, o job setup, o api, o bronze-api e o consumer, na imagem de produção com o código atual — num projeto do compose à parte, com volumes descartáveis e sem porta no host, e o confere de ponta a ponta por HTTP — o health de cada processo, a matriz da leitura do bronze (401, 403, 404, 422), o lote que vai do app à silver sem perda, o reenvio sem repetição, a página vazia com o mesmo cursor e o caos (consumer, RabbitMQ e Mongo parados, com a contagem final). Use depois de mudar qualquer peça do caminho app → producer → fila → consumer → bronze → bronze-api (rotas de telemetria e do bronze, serviços de service/telemetry, messaging, repository/mongo, perfis do settings.toml, compose, Dockerfile) e antes de concluir um passo do pipeline.
 allowed-tools: Bash(bash .claude/skills/smoke-pipeline/smoke.sh *)
 ---
 
@@ -14,7 +14,7 @@ publica, o consumer grava e o bronze-api entrega à silver. Rode a partir da rai
 bash .claude/skills/smoke-pipeline/smoke.sh
 ```
 
-Leva de 4 a 5 minutos. A parte lenta é a subida (cerca de 2 min): a primeira inicialização de
+Leva de 7 a 9 minutos. A parte lenta é a subida (cerca de 2 min): a primeira inicialização de
 um volume novo do RabbitMQ e o job `setup`. O roteiro:
 
 1. reconstrói as imagens do projeto `smoke-pipeline` com o código atual;
@@ -38,7 +38,17 @@ um volume novo do RabbitMQ e o job `setup`. O roteiro:
      repetiu nada;
    - a página vazia devolve o cursor recebido, e a releitura do começo tem 4 registros;
 5. confere a fila e a DLQ vazias e nenhum 5xx ou traceback nos logs dos três processos;
-6. apaga o projeto inteiro (containers, volumes e imagens), também quando falha ou é
+6. roda o caos (`caos.py`, dentro do container do api, uma etapa por estado dos serviços):
+   - consumer parado: 600 lotes recebem 202 e acumulam na fila. Ele volta e leva um SIGTERM
+     assim que o primeiro lote aparece no log (a linha diz quantos ele gravou antes de parar; se
+     forem nenhum ou todos, o cenário não aconteceu, e o smoke reprova), e volta de novo;
+   - RabbitMQ parado: o envio dá 503 com `Retry-After`, o api fica `degraded` com 200, o resto
+     da API segue e o consumer fica de pé e não pronto; o broker volta, e ele reconecta sozinho;
+   - Mongo parado: o api continua dando 202, o bronze-api dá 503 e o consumer não fica pronto;
+     o Mongo volta, e a fila drena;
+   - a contagem: todo id aceito num 202 está no bronze, sem duplicado, e o
+     `flask rabbitmq dlq-list` mostra a DLQ vazia;
+7. apaga o projeto inteiro (containers, volumes e imagens), também quando falha ou é
    interrompido.
 
 O ambiente de desenvolvimento (projeto `base-api`) não é tocado: nem os containers, nem os
@@ -53,13 +63,14 @@ impresso.
 | `FALHOU` numa linha do roteiro (código 1) | a verificação da linha não bateu; vem o detalhe e, no fim, o log dos quatro processos | trate como bug: reproduza com um teste (`/verificar testes tests/e2e/test_pipeline.py`) antes de corrigir |
 | `FALHOU  a subida dos processos` | o setup falhou ou um processo não ficou saudável em 240 s; vêm os logs | migração, topologia, índice ou configuração obrigatória do perfil |
 | `a silver lê os 3 aceitos` falhou com lista vazia | o lote não chegou ao bronze no prazo (60 s) | o log do consumer diz se ele consumiu; a fila e a DLQ, abaixo, dizem onde a mensagem ficou |
+| `FALHOU` numa linha de caos | o processo não reagiu como a matriz de falhas manda | `/health/ready` e o log do consumer dizem onde parou; as decisões estão em 02-decisoes, "Parada e queda" |
+| `aceitos = documentos` falhou | perda ou duplicado depois de uma queda | bug grave: confira a fila, a DLQ e o `telemetry_rejections` antes de mexer no smoke |
 | `houve 5xx ou traceback` | erro interno num dos processos | o log do processo traz o traceback |
 | `INFRA:` (código 2) | Docker parado ou build quebrado | resolva o ambiente; não é falha do código |
 
 ## Quando o roteiro precisa mudar
 
-O caos (consumer, RabbitMQ ou Mongo parados no meio do fluxo) chega na Fase 5, e a correlação
-pelo `request_id` nos logs, na Fase 6: as duas entram aqui, como etapas novas do `fluxo.py` ou do
+A correlação pelo `request_id` nos logs chega na Fase 6, como etapa nova do `fluxo.py` ou do
 `smoke.sh`. Mantenha o roteiro curto: os detalhes são do pytest (`tests/e2e/test_pipeline.py`
 cobre o mesmo fluxo no processo); o smoke prova que os processos de verdade, montados pelo
 compose, fazem o mesmo.

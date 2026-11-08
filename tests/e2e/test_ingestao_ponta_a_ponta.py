@@ -4,6 +4,7 @@ Nada de dublê: a rota, o serviço, o Postgres (a posse), o RabbitMQ do vhost de
 testes e o Mongo de testes, como os dois containers os montam.
 """
 
+import time
 from uuid import uuid4
 
 import pytest
@@ -108,3 +109,46 @@ def test_o_comando_de_setup_exige_a_url_de_gerenciamento(app, cli, monkeypatch):
 
     assert resultado.exit_code != 0
     assert "AMQP_MANAGEMENT_URL não definida" in resultado.output
+
+
+def _dlq_list(cli, esperado):
+    """A saída do ``dlq-list`` quando ela trouxer ``esperado``: a mensagem morta leva um
+    instante para chegar à DLQ."""
+    prazo = time.monotonic() + 5
+    while True:
+        resultado = cli.invoke(args=["rabbitmq", "dlq-list"])
+        if esperado in resultado.output or time.monotonic() >= prazo:
+            return resultado
+        time.sleep(0.1)
+
+
+def test_os_comandos_da_dlq_listam_e_republicam(app, cli, publicar, bronze_queue, dead_letters):
+    assert bronze_queue() == dead_letters() == []
+    publicar(b"isto nao e json", message_id="fora-do-contrato")
+    _consumir(app)
+
+    lista = _dlq_list(cli, "fora-do-contrato")
+    republicacao = cli.invoke(args=["rabbitmq", "dlq-requeue", "--limit", "5"])
+
+    assert lista.exit_code == 0, lista.output
+    assert "motivo=rejected" in lista.output
+    assert "fila=bronze.telemetry" in lista.output
+    assert republicacao.exit_code == 0, republicacao.output
+    assert "1 mensagem(ns) republicada(s)" in republicacao.output
+    assert [p.message_id for p, _ in bronze_queue(minimo=1)] == ["fora-do-contrato"]
+
+
+def test_o_comando_de_republicar_exige_o_limite(cli):
+    resultado = cli.invoke(args=["rabbitmq", "dlq-requeue"])
+
+    assert resultado.exit_code == 2
+    assert "--limit" in resultado.output
+
+
+def test_a_dlq_vazia_e_dita_em_palavras(cli, dead_letters):
+    assert dead_letters() == []
+
+    resultado = cli.invoke(args=["rabbitmq", "dlq-list"])
+
+    assert resultado.exit_code == 0, resultado.output
+    assert "A DLQ está vazia." in resultado.output

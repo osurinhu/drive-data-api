@@ -8,7 +8,8 @@ e o que as liga a ele.
 
 As filas são *quorum*: replicadas e duráveis, e o tipo não muda depois de criadas.
 O comportamento da fila principal (para onde vai a mensagem morta, quantas
-entregas ela aguenta) vem de uma policy, que muda sem recriar a fila.
+entregas ela aguenta, quanto ela guarda) vem de uma policy, que muda sem recriar a
+fila.
 
 Mensagem morta é a que o consumer recusou por estar fora do contrato, ou a que
 passou do limite de entregas sem ser gravada. Ela vai para o ``telemetry.dlx`` e
@@ -27,9 +28,11 @@ DEAD_LETTER_EXCHANGE = "telemetry.dlx"
 DEAD_LETTER_QUEUE = "bronze.telemetry.dlq"
 #: A policy da fila principal.
 POLICY = "bronze-telemetry"
+#: A policy da DLQ.
+DEAD_LETTER_POLICY = "bronze-telemetry-dlq"
 
 
-def apply(api: ManagementApi, vhost: str, *, delivery_limit: int) -> None:
+def apply(api: ManagementApi, vhost: str, *, delivery_limit: int, max_bytes: int) -> None:
     """Cria, ou mantém como estão, o vhost, os exchanges, as filas e os bindings, e
     aplica a policy da fila principal."""
     api.ensure_vhost(vhost)
@@ -51,9 +54,20 @@ def apply(api: ManagementApi, vhost: str, *, delivery_limit: int) -> None:
             # at-most-once, e a mensagem morta pode se perder no caminho.
             "dead-letter-strategy": "at-least-once",
             "overflow": "reject-publish",
+            # A contrapressão: cheia, a fila recusa a publicação com `nack`, e o
+            # producer responde 503. Não se perde o que já foi aceito.
+            "max-length-bytes": max_bytes,
             # Conta só as entregas que falharam (o `reject` do consumer, a queda da
             # conexão com a mensagem pendente). O `nack` da falha transitória não
             # conta (RabbitMQ 4.3+).
             "delivery-limit": delivery_limit,
         },
+    )
+    # A DLQ não tem DLX: com o limite padrão do quorum (20), quem a lê e cai com a
+    # mensagem pendente a faria sumir. O -1 desliga o limite.
+    api.put_policy(
+        vhost,
+        DEAD_LETTER_POLICY,
+        pattern=f"^{re.escape(DEAD_LETTER_QUEUE)}$",
+        definition={"delivery-limit": -1},
     )

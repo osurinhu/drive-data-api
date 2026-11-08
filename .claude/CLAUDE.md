@@ -46,7 +46,7 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 - O `api` roda a imagem do último build. Mudou modelo? `docker compose up -d --build --wait api`
   antes de `alembic revision --autogenerate` (ver `/migracao`).
 - Serviços: `db`, `mongo`, `rabbitmq`, o job `setup` (migra, aplica a topologia e os índices e
-  termina), `api` (:5000), `bronze-api` (:5001) e `consumer` (sem porta: `flask consumer run`).
+  termina), `api` (:5000), `bronze-api` (:5001) e `consumer` (sem porta publicada: `flask consumer run`).
   O `test` espera os três primeiros saudáveis.
 - `docker compose exec`/`run` sempre com `-T` (o Bash daqui não tem TTY).
 - O Git Bash reescreve `/srv` como `C:/Program Files/Git/srv`: use `MSYS_NO_PATHCONV=1` em
@@ -75,7 +75,7 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 - `/smoke-api` — a imagem de produção num container avulso com banco descartável, conferida
   por HTTP (a matriz 401/403/404 e o `X-Request-ID` no log). É também o "rodar/subir a API".
 - `/smoke-pipeline` — os três processos reais (`api`, `consumer`, `bronze-api`) num projeto do
-  compose à parte, conferidos por HTTP do app à silver (~4 min).
+  compose à parte, conferidos por HTTP do app à silver (de 7 a 9 min, com o caos).
 - `/medir-consultas <operação>` — conta o SQL emitido e detecta N+1 antes de otimizar.
 - Agente `revisor-arquitetura` — revisão independente do diff.
 - Hook `SessionStart` (`.claude/hooks/estado-docker.sh`) — a sessão começa com uma linha sobre o

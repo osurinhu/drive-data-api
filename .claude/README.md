@@ -53,7 +53,7 @@ Preferências pessoais vão em `settings.local.json`, que não é versionado.
 | 1 | `revisor-arquitetura` | feito e validado num ensaio sobre o molde `Item`: zero bloqueantes; os trechos das regras que gerariam falso positivo foram corrigidos (ver registro) |
 | 2 | `/smoke-api`: a imagem de produção num container avulso, com banco descartável, um usuário por papel (`flask create-user`), a matriz 401/403/404/409/422 por curl e o `X-Request-ID` rastreado no log — também é a skill que o `/run` embutido procura | feito em 2026-11-06 e validado: 24 verificações em ~30 s, `db` e `api` de desenvolvimento intocados, caminho de falha conferido por mutação. Falta a permissão no `settings.json` (ver registro) |
 | 2 | Hook `SessionStart` com uma linha de estado do Docker (daemon, `db`, `api`) | script feito e validado em 4 cenários; **falta registrá-lo no `settings.json`** (ver registro) |
-| 2 | `/smoke-pipeline`: o compose inteiro num projeto à parte (`-p smoke-pipeline`), na imagem de produção, com um usuário por papel, a matriz da leitura do bronze e o lote do app à silver, sem perda e sem repetição; o caos entra na Fase 5 | feito em 2026-11-07 (passo 1.5) e validado: 18 verificações em ~4 min, sem tocar no ambiente de desenvolvimento. Falta a permissão no `settings.json` (ver registro) |
+| 2 | `/smoke-pipeline`: o compose inteiro num projeto à parte (`-p smoke-pipeline`), na imagem de produção, com um usuário por papel, a matriz da leitura do bronze e o lote do app à silver, sem perda e sem repetição, e o caos (Fase 5) | feito em 2026-11-07 (passo 1.5) e validado: 18 verificações em ~4 min, sem tocar no ambiente de desenvolvimento. Falta a permissão no `settings.json` (ver registro) |
 | 2 | `/remover-exemplo`: tirar `Item` com segurança quando houver entidades reais | feito à mão na Fase 3 do pipeline (2026-11-08, migração 0006). Era operação de uma vez só: a skill não chegou a existir |
 | 3 | `/medir-consultas` (padrão `sql_log` / `test_write_cost`) antes de otimizar | feito em 2026-11-06 e validado: referência de `Item` medida; N+1 provocado por mutação (23 SELECT) e remédio com `selectinload` medido (4); trava contra a medição esquecida conferida |
 | 3 | `memory: project` no revisor, para acumular erros recorrentes | avaliado em 2026-11-06: adiado. Duas revisões ainda não mostram erro recorrente, e a memória daria ao revisor escrita no repositório e o viés das revisões anteriores. Reavaliar quando o mesmo achado se repetir em revisões diferentes |
@@ -494,3 +494,37 @@ sugestão que restava, um contrato para o método de escrita sem `@permission_re
     na tabela de camadas e na `dominio.md`; dois "Ainda não (Fase 4)" da 02 que a fase tornou falsos
     (um deles a revisão não apontou); o parágrafo colado do cursor; o porquê do `v: 2` na 02; os
     limites no checklist de produção; a docstring do envio.
+- 2026-11-08 — Pipeline de telemetria, Fase 5 (resiliência): o teto da fila em bytes (contrapressão
+  com 503), a reconexão do consumer no próprio processo, o servidor de saúde em :8081 com o
+  healthcheck do compose, `flask rabbitmq dlq-list` e `dlq-requeue`, e o caos no `/smoke-pipeline`.
+  - **Desvios do plano:**
+    - a pausa com o Mongo fora continua com `nack` mensagem a mensagem. O plano mandava fechar o
+      canal e esperar o `ping`; fechar conta para o `delivery-limit`, o `basic_cancel` do pika
+      devolve com `reject` (que também conta), e segurar as mensagens estouraria o
+      `consumer_timeout`. A prontidão vem da sonda do Mongo em `/health/ready`;
+    - o publisher não mudou: timeouts, reconexão, sem rota e `nack` já existiam desde o 1.3. A
+      fase só acrescenta o teste da fila cheia;
+    - a listagem da DLQ devolve com `nack`, que não conta, em vez de nunca devolver.
+  - **Regras alteradas:** a `mensageria.md` (`basic_cancel`, reconexão, DLQ, `time.sleep` só sem
+    conexão), a `infra.md` (healthcheck do consumer) e a `testes.md` (`queue_max_bytes`). O
+    `/smoke-pipeline` ganhou o caos e passou a levar de 7 a 9 minutos. Valem a partir da sessão
+    seguinte.
+  - **Lições:**
+    - o `basic_cancel` do pika documenta "nacks", mas o código usa `basic_reject`: no RabbitMQ
+      4.3+, isso conta para o `delivery-limit`;
+    - o pika registra cada conexão recusada ou resetada com traceback. Com o logger inteiro em
+      `CRITICAL`, quem registra a falha são os adaptadores, que a recebem como exceção;
+    - cenário de "SIGTERM no meio" só prova algo se o roteiro confere que ele caiu no meio: na
+      primeira rodada, a fila já estava vazia, e o smoke passava igual.
+  - **Contagens:** `/verificar tudo` com 560 testes; `/smoke-pipeline` verde, com o SIGTERM no
+    meio da drenagem e aceitos = documentos depois de consumer, RabbitMQ e Mongo parados.
+  - **Revisão** (`revisor-arquitetura`). Corrigidos: a frase falsa sobre o `ext.consumer` importar
+    `messaging` na 01; o tempo do smoke no `CLAUDE.md`; o `time.sleep` na regra; a frase truncada
+    da DLQ na 02; a Estrutura do README. Teste novo por sugestão dela: a mensagem republicada
+    ganha um limite de entregas novo.
+  - **`/code-review`** (o plano pede ao fim da Fase 5). Corrigidos: a espera da reconexão que
+    zerava em conexão instável; o `dlq-requeue` que relia a mesma mensagem até o `--limit`; a
+    policy `bronze-telemetry-dlq`, com o limite de entregas desligado; o motivo da última morte na
+    listagem; o traceback do servidor de saúde quando o cliente desiste; o `import pika` em `ext/`.
+    Mantidos: repetir para sempre erro permanente do broker (sair com 1 também reiniciaria sem
+    fim, e o `unhealthy` e o aviso dizem o motivo); a DLQ sem teto; o pika em `CRITICAL`.

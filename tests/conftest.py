@@ -270,10 +270,18 @@ def delivery_limit():
 
 
 @pytest.fixture(scope="session")
-def amqp_topology(amqp_vhost, amqp_management, delivery_limit):
+def queue_max_bytes():
+    """O ``AMQP_QUEUE_MAX_BYTES`` do settings.toml, o que a policy de teste aplica."""
+    return int(_config["AMQP_QUEUE_MAX_BYTES"])
+
+
+@pytest.fixture(scope="session")
+def amqp_topology(amqp_vhost, amqp_management, delivery_limit, queue_max_bytes):
     """A topologia da telemetria aplicada no vhost de testes, pelo mesmo
     ``topology.apply`` que o ``flask rabbitmq setup`` usa. Devolve o vhost."""
-    topology.apply(amqp_management, amqp_vhost, delivery_limit=delivery_limit)
+    topology.apply(
+        amqp_management, amqp_vhost, delivery_limit=delivery_limit, max_bytes=queue_max_bytes
+    )
     return amqp_vhost
 
 

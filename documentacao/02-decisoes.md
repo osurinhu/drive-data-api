@@ -351,16 +351,17 @@ comportamento da fila principal vai pela policy `bronze-telemetry`, que muda sem
 fila: a mensagem morta segue para o `telemetry.dlx` (`dead-letter-exchange`), com
 `dead-letter-strategy: at-least-once` (ela só sai da fila depois que a DLQ a confirma), o
 `overflow: reject-publish` que essa estratégia exige (com o `drop-head` padrão, o RabbitMQ
-volta ao *at-most-once*) e o `delivery-limit` de `AMQP_DELIVERY_LIMIT`. O teto de tamanho
-(`max-length-bytes`, a contrapressão que vira 503 no producer) entra na Fase 5.
+volta ao *at-most-once*), o `delivery-limit` de `AMQP_DELIVERY_LIMIT` e o teto de
+`AMQP_QUEUE_MAX_BYTES` (`max-length-bytes`). Esse teto é a contrapressão: cheia, a fila responde à
+publicação com `nack`, e o envio de lote dá 503 com `Retry-After`, sem tocar no que ela já aceitou.
 **Descartado:** cada processo declarar o que usa na subida (cada um precisaria de permissão
 de configurar o broker, e os argumentos se espalhariam por dois lugares); fila clássica (sem
 limite de entregas nem replicação); os limites em `x-arguments`, que não mudam sem recriar a
 fila.
-**Custo aceito:** a própria DLQ fica sem policy: tem o `delivery-limit` padrão do quorum (20) e
-nenhum DLX. Quem a lê e devolve a mensagem com `reject`, ou cai com ela pendente, a faz contar,
-e passadas 20 vezes ela é descartada. Os comandos de operação da DLQ (Fase 5) confirmam ou
-republicam, nunca devolvem.
+A DLQ tem a policy `bronze-telemetry-dlq`, só com `delivery-limit: -1`: sem DLX, o limite padrão do
+quorum (20) faria sumir a mensagem de quem a lê e cai com ela pendente.
+**Custo aceito:** a DLQ não tem teto de tamanho. Com teto, ela descartaria a mensagem mais antiga
+ou travaria a fila principal; a proteção é o alerta de DLQ acima de zero.
 
 ### O consumer é um comando da CLI, com um container de DI próprio
 O processo consumer é o `flask consumer run` (`ext/consumer.py`), no perfil `[consumer]`, com
@@ -458,26 +459,57 @@ A pausa usa `connection.sleep` do pika em fatias de 1 s, que continua atendendo 
 `time.sleep` derrubaria a conexão) e para quando o processo recebe SIGTERM.
 **Descartado:** `nack` para o bug, que nunca chegaria à DLQ; fechar o canal quando o bronze cai
 (o que o plano previa), porque a queda do canal com mensagens pendentes conta para o limite, e
-uma queda longa do Mongo mandaria mensagens boas para a DLQ; filas de espera com TTL, porque a
+uma queda longa do Mongo mandaria mensagens boas para a DLQ; cancelar o consumo durante a queda,
+porque o `basic_cancel` do pika devolve o que chega nesse meio-tempo com `reject`, que conta, e
+um Mongo que oscila gastaria o limite; esperar o `ping` do Mongo com as mensagens na mão, porque
+numa queda longa elas estourariam o `consumer_timeout` do broker (30 min), e a próxima tentativa já
+é o teste de que o bronze voltou; filas de espera com TTL, porque a
 falha transitória aqui é da infraestrutura e atinge todas as mensagens: o certo é pausar o
 consumo, e não atrasar uma mensagem.
 **Rede de segurança:** `tests/rabbitmq/test_consumo.py` confere a contagem contra o broker de
 verdade: a falha transitória repetida mais vezes que o limite não chega à DLQ, e o bug chega
 nela depois de exatamente `limite + 1` tentativas, com `x-first-death-reason: delivery_limit`.
 
-### Parada e queda: o sinal pede a parada, a queda do broker encerra o processo
+### Parada e queda: o sinal pede a parada, e a queda do broker reconecta
 O `flask consumer run` instala handlers de SIGTERM e SIGINT que só pedem a parada: o consumidor
 termina a mensagem corrente, devolve as outras à fila com `nack` (que não conta) e fecha.
 No container, o processo é o PID 1, que o kernel não deixa morrer pelo SIGTERM sem um
 handler: sem ele, o `docker compose stop` esperaria os 10 s e mataria.
-Se o broker cai ou a fila não existe, o consumo levanta `ConsumerFailed` e o comando sai com
-código 1. O que estava em voo, sem ack, volta para a fila, e o `restart: unless-stopped` do
-compose sobe o processo de novo.
-**Por quê:** a parada limpa e a pausa com backoff já são necessárias para o primeiro critério
-da fatia (o consumer parado, a fila acumula; de volta, ela drena). A reconexão no próprio
-processo, com o servidor de saúde em :8081, é da Fase 5.
-**Custo aceito:** até a Fase 5, o consumer não tem healthcheck no compose, e um broker que cai
-e volta custa um reinício do processo.
+Se o broker cai ou a fila não existe, o `run_until_stopped` reconecta com a mesma espera
+crescente (0,5 s → 30 s), sem encerrar o processo. O que estava em voo, sem ack, volta para a
+fila. A espera só recomeça do início depois de uma conexão que ficou de pé por 30 s: numa
+conexão instável, cada queda com mensagens em voo conta para o limite de entregas.
+Enquanto roda, o processo responde em `CONSUMER_HEALTH_PORT` (:8081, não publicada no host):
+`/health/live` diz que está de pé, e `/health/ready`, que está inscrito na fila e com o Mongo
+respondendo. É o healthcheck do compose. O Mongo tem sonda própria porque, com a fila vazia,
+nenhuma gravação descobriria a queda. O `ping` que deu certo vale por 30 s, e o que falhou não fica
+guardado, para a volta aparecer na pergunta seguinte.
+**Por quê:** um processo de pé e não pronto se observa. Um processo que sai e volta some do
+health, e cada reinício custa a subida inteira da aplicação.
+**Descartado:** encerrar com código 1 e deixar o `restart` do compose reconectar; deixar a
+prontidão depender da última gravação, porque numa fila com réplicas outra réplica pode ter gravado
+a mensagem, e o consumer ficaria "não pronto" até a próxima chegar; rotas do Flask para os dois
+caminhos, porque o processo não tem servidor WSGI.
+**Custo aceito:** a mensagem que chega enquanto o `basic_cancel` da parada corre volta com
+`reject`, e aquela entrega conta. É uma entrega por parada, longe do limite. E a queda do Mongo
+pode levar até 30 s para aparecer em `/health/ready`, com a fila vazia.
+
+### A DLQ se opera por dois comandos, e olhar não gasta entrega
+`flask rabbitmq dlq-list --limit N` mostra as mensagens mortas, com o motivo, a fila de origem e os
+headers de inspeção. `flask rabbitmq dlq-requeue --limit N` as republica no exchange da telemetria,
+com a routing key original. O `--limit` é obrigatório na republicação: ela é o único caminho de
+volta de uma mensagem que já falhou, e só faz sentido depois de corrigida a causa. Vale também o
+tamanho da DLQ na primeira leitura, porque com o consumer de pé a mensagem ainda inválida volta
+na hora.
+O `dlq-requeue` confirma na DLQ só depois da confirmação do broker. A queda entre as duas deixa
+a mensagem nas duas filas, e o consumer grava cada registro uma vez só, pelo `id`. A primeira
+mensagem que o broker não aceitar interrompe a operação e continua na DLQ. O `dlq-list` lê com
+`basic_get` e devolve com `nack`, que não conta.
+**Por quê:** a mensagem morta é o rastro de uma falha: operar a DLQ não pode perdê-la.
+**Descartado:** ler pela API de gerenciamento, que daria aos comandos uma segunda credencial.
+**Rede de segurança:** `tests/rabbitmq/test_dead_letters.py` confere, contra o broker de verdade,
+que listar não tira da DLQ nem aumenta o `x-delivery-count`, que cair com a mensagem pendente 22
+vezes não a descarta, e que a mensagem sem rota continua lá.
 
 ### A silver lê o bronze por cursor, com uma janela de estabilização e um relógio só
 O `bronze-api` serve `GET /bronze/records`, que exige `bronze:ler` (escopo

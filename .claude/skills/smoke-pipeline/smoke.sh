@@ -30,6 +30,8 @@ Sobe o pipeline inteiro num projeto do compose à parte (smoke-pipeline): db, mo
 rabbitmq, o job setup, o api, o bronze-api e o consumer, com o código atual. Confere o
 health de cada processo, a matriz da leitura (401, 403, 404, 422), o lote que vai do
 app à silver sem perda, o reenvio sem repetição e a página vazia com o mesmo cursor.
+Depois, o caos: consumer parado (e parado de novo no meio da drenagem), RabbitMQ parado
+e Mongo parado, com a contagem final: aceitos no 202 = documentos no bronze.
 
 Saída: 0 = tudo OK; 1 = alguma verificação falhou (ou um processo não subiu);
        2 = infraestrutura (Docker parado, build quebrado).
@@ -133,6 +135,120 @@ if "${P[@]}" logs --no-log-prefix api bronze-api consumer 2>&1 |
   resultado=1
 else
   echo "OK      nenhum 5xx nem traceback nos logs do api, do bronze-api e do consumer"
+fi
+
+# --- O caos ---------------------------------------------------------------------
+
+# Muitos, para a drenagem durar bem mais que o `docker compose stop` leva para chegar.
+lotes_do_sigterm=600
+
+caos() {
+  "${P[@]}" exec -T -e SMOKE_SENHA="$senha" api python - "$@" <"$pasta/caos.py" || resultado=1
+}
+
+# Sobe o serviço de volta e espera ele ficar saudável; o resto do projeto fica como está.
+voltar() {
+  "${P[@]}" up -d --wait --wait-timeout 180 --no-deps "$@" >"$tmp/voltar.log" 2>&1 || {
+    echo "FALHOU  $* não voltou:"
+    tail -n 10 "$tmp/voltar.log" | sed 's/^/        /'
+    resultado=1
+  }
+}
+
+# O código HTTP de /health/ready do consumer, ou 000 se ele não responder.
+pronto() {
+  "${P[@]}" exec -T consumer python -c "
+import urllib.error, urllib.request
+try:
+    print(urllib.request.urlopen('http://localhost:8081/health/ready', timeout=4).status)
+except urllib.error.HTTPError as erro:
+    print(erro.code)
+" 2>/dev/null | tr -d '\r' || echo 000
+}
+
+# Quantos lotes o consumer gravou até agora, pelo log dele.
+gravados() {
+  "${P[@]}" logs --no-log-prefix consumer 2>/dev/null | grep -c 'gravado no bronze'
+}
+
+# Espera /health/ready dar o código $1, até $2 segundos.
+esperar_pronto() {
+  local fim=$(($(date +%s) + $2))
+  while [ "$(date +%s)" -lt "$fim" ]; do
+    [ "$(pronto)" = "$1" ] && return 0
+    sleep 2
+  done
+  return 1
+}
+
+confere_pronto() {
+  if esperar_pronto "$1" "$2"; then
+    echo "OK      $3"
+  else
+    echo "FALHOU  $3: /health/ready respondeu '$(pronto)'"
+    resultado=1
+  fi
+}
+
+if [ "$resultado" -eq 0 ]; then
+  echo ">> caos: consumer parado, a fila acumula"
+  "${P[@]}" stop consumer >/dev/null 2>&1
+  caos enviar "$lotes_do_sigterm"
+
+  echo ">> caos: o consumer volta e leva SIGTERM no meio da drenagem"
+  antes="$(gravados)"
+  "${P[@]}" start consumer >/dev/null 2>&1
+  # Para assim que o primeiro lote aparece no log, com o resto ainda na fila.
+  fim=$(($(date +%s) + 60))
+  while [ "$(gravados)" -le "$antes" ] && [ "$(date +%s)" -lt "$fim" ]; do sleep 0.2; done
+  "${P[@]}" stop consumer >/dev/null 2>&1
+  drenados=$(($(gravados) - antes))
+  if [ "$drenados" -gt 0 ] && [ "$drenados" -lt "$lotes_do_sigterm" ]; then
+    echo "OK      SIGTERM no meio da drenagem: parou depois de $drenados de $lotes_do_sigterm lotes"
+  else
+    echo "FALHOU  o SIGTERM não caiu no meio da drenagem: $drenados de $lotes_do_sigterm lotes"
+    resultado=1
+  fi
+  voltar consumer
+
+  echo ">> caos: RabbitMQ parado"
+  "${P[@]}" stop rabbitmq >/dev/null 2>&1
+  caos rabbit-fora
+  confere_pronto 503 45 "broker fora: o consumer fica de pé e não pronto"
+  voltar rabbitmq
+  confere_pronto 200 90 "o broker voltou: o consumer reconectou sozinho"
+  caos enviar 5
+
+  echo ">> caos: Mongo parado"
+  "${P[@]}" stop mongo >/dev/null 2>&1
+  caos mongo-fora 5
+  confere_pronto 503 60 "Mongo fora: o consumer fica de pé e não pronto"
+  voltar mongo
+  confere_pronto 200 90 "o Mongo voltou: o consumer está pronto de novo"
+
+  echo ">> caos: a contagem"
+  caos conferir
+
+  # O comando de operação, como o README manda rodar, com a DLQ que deve ter sobrado.
+  dlq_lista="$("${P[@]}" run --rm -T --no-deps --entrypoint flask setup rabbitmq dlq-list 2>&1)"
+  if grep -q "A DLQ está vazia" <<<"$dlq_lista"; then
+    echo "OK      flask rabbitmq dlq-list: a DLQ está vazia depois do caos"
+  else
+    echo "FALHOU  flask rabbitmq dlq-list:"
+    tail -n 10 <<<"$dlq_lista" | sed 's/^/        /'
+    resultado=1
+  fi
+
+  # Os 503 agora são esperados; 500 e traceback, não.
+  erros="$("${P[@]}" logs --no-log-prefix api bronze-api consumer 2>&1 |
+    grep -E -A12 '" 50[0124-9] |" 5[1-9][0-9] |Traceback')"
+  if [ -n "$erros" ]; then
+    echo "FALHOU  houve erro interno ou traceback nos logs durante o caos:"
+    head -n 30 <<<"$erros" | cut -c1-200 | sed 's/^/        /'
+    resultado=1
+  else
+    echo "OK      nenhum erro interno nem traceback nos logs durante o caos"
+  fi
 fi
 
 if [ "$resultado" -ne 0 ]; then

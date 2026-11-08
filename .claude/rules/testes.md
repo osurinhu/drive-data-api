@@ -23,7 +23,7 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
   `mongo_db` (o banco `<MONGO_DATABASE>_test`, para ler e preparar; não abre contexto de
   aplicação); `bronze_limpo` (apaga as coleções no fim; autouse em `tests/mongo/` e
   `tests/e2e/`); `amqp_url`, `amqp_management_url`, `amqp_management` e `amqp_vhost` (o vhost
-  `drive-data-test`, criado pela API de gerenciamento); `delivery_limit`; `amqp_topology` (a
+  `drive-data-test`, criado pela API de gerenciamento); `delivery_limit`; `queue_max_bytes`; `amqp_topology` (a
   topologia aplicada nele por `topology.apply`); `bronze_queue` e `dead_letters` (a fila e a
   DLQ vazias no começo e no fim; chamadas, devolvem e tiram as mensagens como
   `(propriedades, corpo)`); `publicar(corpo)` (publica no exchange da telemetria, com

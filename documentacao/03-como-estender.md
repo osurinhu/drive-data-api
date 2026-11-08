@@ -548,8 +548,9 @@ dentro do comando: o processo que nunca o roda não precisa dela. Erro da infrae
 
 **Processo de longa duração** (o `flask consumer run`) segue o mesmo formato, numa extensão só
 dele (`ext/consumer.py`), que só o perfil daquele processo carrega. O comando pega o objeto
-pronto no container do processo e instala o handler de SIGTERM: no container, ele é o PID 1
-(02-decisoes, "Parada e queda").
+pronto no container do processo e instala o handler de SIGTERM: no container, ele é o PID 1.
+Como não tem rota de health, responde a saúde numa porta própria, em
+`instrumentation/consumer_health.py` (02-decisoes, "Parada e queda").
 
 ---
 

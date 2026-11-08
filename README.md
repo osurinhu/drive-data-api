@@ -146,6 +146,28 @@ fica em 0. Uma mensagem na DLQ estava fora do contrato ou falhou mais que
 (`docker compose stop consumer`), o `api` continua respondendo 202 e a fila acumula; quando ele
 volta (`docker compose start consumer`), ela é drenada, sem duplicar nada.
 
+**O que cada queda faz.** Nada aceito num 202 se perde em nenhuma delas:
+
+| Quem cai | `api` | `consumer` | `bronze-api` |
+|---|---|---|---|
+| `consumer` | segue dando 202; a fila acumula | — | segue |
+| RabbitMQ | o envio dá 503 com `Retry-After`; o resto segue, com o health `degraded` | de pé e não pronto; reconecta sozinho | segue |
+| Mongo | segue dando 202 | de pé e não pronto; as mensagens esperam na fila | 503 |
+
+A saúde do consumer fica em `http://localhost:8081/health/ready`, dentro do container (é o
+healthcheck do compose). Com a fila no teto (`AMQP_QUEUE_MAX_BYTES`, 2 GiB), o envio também dá 503.
+
+**A DLQ** guarda o que o consumer não conseguiu gravar. Ela não tem consumidor e pede ação:
+
+```bash
+docker compose run --rm -T --no-deps --entrypoint flask setup rabbitmq dlq-list --limit 20
+# depois de corrigir a causa:
+docker compose run --rm -T --no-deps --entrypoint flask setup rabbitmq dlq-requeue --limit 20
+```
+
+Mudou `AMQP_QUEUE_MAX_BYTES` ou `AMQP_DELIVERY_LIMIT`? Rode o `setup` de novo
+(`docker compose up -d setup`), porque os dois vão na policy da fila.
+
 A camada silver lê o bronze pelo `bronze-api` (porta 5001), com uma conta de sistema de papel
 `silver`, que só um operador cria, pela CLI. A senha é um segredo de pelo menos 32 caracteres,
 gerado por `python -c "import secrets; print(secrets.token_urlsafe(32))"` e guardado no cofre
@@ -209,7 +231,7 @@ Com `FLASK_PROCESS=api` no `.env`, a aplicação sobe como o processo `api` e ne
 ```
 app/
   app.py                  create_app(): factory; não conhece nenhuma extensão
-  instrumentation/        observação usada por mais de uma extensão (sondas do health, id da requisição)
+  instrumentation/        observação (sondas do health, id da requisição, saúde do consumer)
   messaging/              RabbitMQ: conexão, sonda, API de gerenciamento, topologia, publisher e consumer
   ext/                    infraestrutura — cada módulo expõe init_app(app)
   domain/                 modelos ORM e o vocabulário puro (papéis e permissões, VIN, portas, contrato da fila)
@@ -400,6 +422,8 @@ Detalhes e o raciocínio por trás:
       ferramentas de teste e não deve ir para produção.
 - [ ] Calibrar os limites do envio com o volume real: `MAX_CONTENT_LENGTH` (1 MiB) no
       `settings.toml`, e os 500 registros e 64 leituras no `app/schemas/telemetry_schema.py`.
+- [ ] Dimensionar `AMQP_QUEUE_MAX_BYTES` (2 GiB) pelo disco do broker e pelo tempo de queda do
+      consumer que se quer absorver, e alertar quando a DLQ tiver qualquer mensagem.
 - [ ] Rever `JWT_ACCESS_TOKEN_EXPIRES` (padrão: 15 min) e `JWT_REFRESH_TOKEN_EXPIRES` (30 dias),
       e agendar o `flask prune-tokens`, que apaga da tabela os tokens de renovação expirados.
 - [ ] Revisar `ROLE_PERMISSIONS` em `app/domain/authz.py` — os papéis que acompanham a base são um

@@ -14,7 +14,8 @@ from flask.cli import AppGroup
 
 from instrumentation.probes import register_probe
 from messaging import topology
-from messaging.connection import broker_reachable, connection_parameters
+from messaging.connection import AmqpParameters, broker_reachable, connection_parameters
+from messaging.dead_letters import DeadLettersFailed, list_dead_letters, requeue_dead_letters
 from messaging.management import ManagementApi, ManagementApiError
 
 rabbitmq_cli = AppGroup("rabbitmq", help="Operação do RabbitMQ.")
@@ -40,16 +41,16 @@ def setup_command() -> None:
     except ValueError as error:
         raise click.ClickException(f"AMQP_MANAGEMENT_URL inválida: {error}.") from None
 
-    # A AMQP_URL já foi validada no init_app; dela saem o vhost e o usuário dos processos.
-    amqp = connection_parameters(
-        str(current_app.config["AMQP_URL"]),
-        timeout=timeout,
-        heartbeat=int(current_app.config["AMQP_HEARTBEAT_SECONDS"]),
-        connection_name="setup",
-    )
+    # Do mesmo endereço saem o vhost e o usuário dos processos.
+    amqp = _operation_parameters("setup")
     vhost, user = amqp.virtual_host, amqp.credentials.username
     try:
-        topology.apply(api, vhost, delivery_limit=int(current_app.config["AMQP_DELIVERY_LIMIT"]))
+        topology.apply(
+            api,
+            vhost,
+            delivery_limit=int(current_app.config["AMQP_DELIVERY_LIMIT"]),
+            max_bytes=int(current_app.config["AMQP_QUEUE_MAX_BYTES"]),
+        )
         # Por enquanto o usuário da AMQP_URL recebe tudo no vhost. Os usuários por
         # processo, cada um com o mínimo, chegam com a segurança operacional.
         api.grant(vhost, user, configure=".*", write=".*", read=".*")
@@ -59,6 +60,44 @@ def setup_command() -> None:
     click.echo(
         f"Topologia aplicada no vhost '{vhost}' "
         f"(fila '{topology.QUEUE}', DLQ '{topology.DEAD_LETTER_QUEUE}')."
+    )
+
+
+@rabbitmq_cli.command("dlq-list")
+@click.option("--limit", type=click.IntRange(min=1), default=20, show_default=True)
+def dlq_list_command(limit: int) -> None:
+    """Mostra as mensagens da DLQ, que continuam lá."""
+    try:
+        letters = list_dead_letters(_operation_parameters("dlq-list"), limit=limit)
+    except DeadLettersFailed as error:
+        raise click.ClickException(f"a DLQ não pôde ser lida: {error}") from error
+    if not letters:
+        click.echo("A DLQ está vazia.")
+    for letter in letters:
+        click.echo(
+            f"{letter.message_id}  motivo={letter.reason}  fila={letter.origin_queue}  "
+            f"registros={letter.record_count}  remetente={letter.sender_user_id}"
+        )
+
+
+@rabbitmq_cli.command("dlq-requeue")
+@click.option("--limit", type=click.IntRange(min=1), required=True)
+def dlq_requeue_command(limit: int) -> None:
+    """Republica mensagens da DLQ na fila principal, depois de corrigida a causa."""
+    try:
+        requeued = requeue_dead_letters(_operation_parameters("dlq-requeue"), limit=limit)
+    except DeadLettersFailed as error:
+        raise click.ClickException(f"a republicação parou: {error}") from error
+    click.echo(f"{requeued} mensagem(ns) republicada(s).")
+
+
+def _operation_parameters(name: str) -> AmqpParameters:
+    """Os parâmetros da AMQP_URL (já validada no init_app) para um comando de operação."""
+    return connection_parameters(
+        str(current_app.config["AMQP_URL"]),
+        timeout=float(current_app.config["AMQP_TIMEOUT_SECONDS"]),
+        heartbeat=int(current_app.config["AMQP_HEARTBEAT_SECONDS"]),
+        connection_name=name,
     )
 
 
@@ -84,9 +123,10 @@ def init_app(app: Flask) -> None:
         # que leva a senha.
         raise RuntimeError(f"AMQP_URL inválida: {error}.") from None
 
-    # O pika registra em INFO cada passo de cada conexão. A sonda abre uma por
-    # chamada do health, e isso afogaria o log; avisos e erros continuam saindo.
-    logging.getLogger("pika").setLevel(logging.WARNING)
+    # O pika registra em INFO cada passo de cada conexão, e com traceback cada queda: com
+    # a sonda abrindo uma por chamada e o broker fora, isso afogaria o log. A falha de
+    # conexão ou de canal chega aos adaptadores como exceção, e são eles que a registram.
+    logging.getLogger("pika").setLevel(logging.CRITICAL)
 
     register_probe(app, "rabbitmq", lambda: broker_reachable(probe_parameters))
     app.cli.add_command(rabbitmq_cli)
