@@ -150,6 +150,65 @@ class RejectionLog(Protocol):
         ...
 
 
+class IngestObserver(Protocol):
+    """O que o recebimento dos lotes conta a quem observa."""
+
+    def record_rejected(self, *, record_id: UUID, vin: str, reason: str) -> None: ...
+
+    def nothing_accepted(self) -> None: ...
+
+    def batch_published(self, batch: TelemetryBatchV1, *, publish_seconds: float) -> None: ...
+
+    def publish_failed(self, batch: TelemetryBatchV1, *, reason: str) -> None: ...
+
+
+class BronzeObserver(Protocol):
+    """O que a gravação no bronze conta a quem observa."""
+
+    def batch_ingested(
+        self,
+        batch: TelemetryBatchV1,
+        *,
+        ingested_at: datetime,
+        stamp_age_seconds: float,
+        inserted: int,
+        duplicates: Collection[UUID],
+        collisions: Collection[UUID],
+        invalid: Collection[UUID],
+    ) -> None: ...
+
+
+class BronzeReadObserver(Protocol):
+    """O que a leitura da silver conta a quem observa."""
+
+    def page_read(self, *, records: int, lag_seconds: float | None) -> None:
+        """``lag_seconds`` só existe na leitura sem filtro: o atraso de um recorte não
+        diz quanto falta do bronze."""
+        ...
+
+
+class ConsumerObserver(Protocol):
+    """O destino de cada mensagem da fila e o estado do consumo."""
+
+    def message_started(
+        self, *, message_id: str | None, request_id: str | None, user_id: int | None
+    ) -> None:
+        """Vem das propriedades AMQP: vale até para a mensagem fora do contrato."""
+        ...
+
+    def message_finished(self) -> None: ...
+
+    def acked(self, *, seconds: float) -> None: ...
+
+    def dead_lettered(self, *, reason: str) -> None: ...
+
+    def requeued(self, *, reason: str) -> None: ...
+
+    def paused(self) -> None: ...
+
+    def resumed(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class BronzePosition:
     """Um ponto da ordem de leitura do bronze, ``(ingested_at, record_id)``: até onde a

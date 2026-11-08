@@ -5,11 +5,13 @@ from datetime import datetime, timedelta
 from domain.authz import OwnerScope
 from domain.ports import (
     BRONZE_START,
+    NO_FILTERS,
     BronzeCursor,
     BronzeEntry,
     BronzeFilters,
     BronzePosition,
     BronzeReader,
+    BronzeReadObserver,
     BronzeUnavailable,
     position_at,
 )
@@ -30,9 +32,12 @@ class BronzeReadService:
     visível passe menos que a janela (02-decisoes, "A silver lê o bronze por cursor").
     """
 
-    def __init__(self, reader: BronzeReader, *, settle_seconds: float) -> None:
+    def __init__(
+        self, reader: BronzeReader, *, settle_seconds: float, observer: BronzeReadObserver
+    ) -> None:
         self._reader = reader
         self._settle = timedelta(seconds=settle_seconds)
+        self._observer = observer
 
     def read(
         self,
@@ -67,12 +72,26 @@ class BronzeReadService:
             if items
             else start
         )
+        has_more = len(entries) > limit
+        self._observer.page_read(
+            records=len(items), lag_seconds=_lag(filters, has_more, watermark, position)
+        )
         return CursorPage(
             items=items,
             next_cursor=BronzeCursor(position=position, filters=filters),
-            has_more=len(entries) > limit,
+            has_more=has_more,
             watermark=watermark,
         )
+
+
+def _lag(
+    filters: BronzeFilters, has_more: bool, watermark: datetime, position: BronzePosition
+) -> float | None:
+    """Quanto a silver está atrás do bronze. Sem mais páginas, ela alcançou: a posição
+    parada no último registro não é atraso."""
+    if filters != NO_FILTERS:
+        return None
+    return (watermark - position.ingested_at).total_seconds() if has_more else 0.0
 
 
 def _start(after: BronzePosition | None, ingested_from: datetime | None) -> BronzePosition:

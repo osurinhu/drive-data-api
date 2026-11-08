@@ -35,6 +35,7 @@ MarkupSafe==3.0.4
 marshmallow==3.26.2
 packaging==26.3
 pika==1.4.4
+prometheus_client==0.26.0
 psycopg==3.3.8
 psycopg-binary==3.3.8
 PyJWT==2.15.1

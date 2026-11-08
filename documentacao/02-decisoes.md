@@ -50,7 +50,7 @@ Cada arquivo que ficava solto na raiz foi para a camada cuja regra ele segue:
 - **`authz.py`, `vin.py` e `ports.py` → `domain/`.** São vocabulário do negócio (papéis e
   permissões, o formato do VIN, as portas do pipeline), que qualquer camada e qualquer processo
   importa. O import diz a camada: `from domain.vin import ...`.
-- **`request_context.py` → `instrumentation/`.** É correlação: o mesmo id vai para o log e para
+- **`request_context.py` → `instrumentation/`** (hoje `correlation.py`). É correlação: o mesmo id vai para o log e para
   o envelope de erro, e o consumer também vai precisar dele, sem importar a camada HTTP.
 - **`http_errors.py` → `blueprint/`.** O envelope de erro é contrato HTTP, e quem o usa são as
   rotas e as extensões HTTP. Quando a extensão importa a camada, é a raiz de composição em ação.
@@ -842,9 +842,66 @@ aconteceu com um `grep`. Sem isso, um 500 em produção dá ao cliente "Erro int
 servidor." e nenhuma pista.
 
 O id entra em três lugares — header de resposta, envelope de erro e log. No log, em **toda
-linha de acesso**, via `--access-logformat` do gunicorn com `%({x-request-id}o)s`. Só nas
-linhas de erro não bastaria: rastrear uma requisição que não falhou (lenta, ou com status
-inesperado) seria impossível.
+linha**, de acesso inclusive. Só nas linhas de erro não bastaria: rastrear uma requisição
+que não falhou (lenta, ou com status inesperado) seria impossível.
+
+### Logs em JSON, com o log de acesso emitido pela aplicação
+Uma linha JSON por evento (`instrumentation/logs.py`), com `ts`, `level`, `logger`,
+`message`, `process`, os ids de correlação e os campos do evento (`event`, em `extra`).
+`LOG_FORMAT = "text"` devolve o formato antigo para ler localmente.
+
+O log de acesso saiu do gunicorn e foi para `ext/observability.py`: o `--access-logformat`
+não escapa JSON (um cabeçalho com aspas quebraria a linha) e não conhece a rota nem o
+usuário. As linhas do próprio gunicorn (subida, worker que morreu) continuam em texto: são
+poucas, e formatá-las exigiria uma classe de logger só para isso.
+
+Os ids moram em `contextvars`, e não no `g` do Flask, porque o consumer não tem requisição:
+ele os põe ali a cada mensagem, a partir das propriedades AMQP, e o formato não precisa
+saber em que processo está. É por isso que um `grep` pelo `request_id` acha as linhas do
+`api` e as do `consumer`.
+
+**Descartado:** `python-json-logger` (uma dependência para 20 linhas) e manter o log de
+acesso do gunicorn ao lado do JSON (duas linhas por requisição, em formatos diferentes).
+
+### Portas de observação: o serviço conta o que aconteceu, e não como se mede
+Os serviços do pipeline e o consumer recebem um observador pelo construtor
+(`IngestObserver`, `BronzeObserver`, `BronzeReadObserver`, `ConsumerObserver`, em
+`domain/ports.py`), sem padrão. Métrica e log do evento ficam em um lugar só, o adaptador em
+`instrumentation/metrics.py`. Assim o `service/telemetry/` e o `messaging/` continuam sem
+importar `prometheus_client`, e o teste do serviço verifica o acontecimento com um dublê.
+
+A recusa só é contada no fim: se a publicação falhar, o app recebe 503 e reenvia, e o mesmo
+registro seria contado duas vezes.
+
+**Descartado:** contadores importados direto no serviço (quebra a regra do pipeline) e
+eventos numa fila em memória (uma peça a mais, sem ninguém que precise dela).
+
+### As métricas ficam fora da API
+`/metrics` fica na raiz, e não em `/api/v1`, sem autenticação e fora do OpenAPI: é o
+endereço que o Prometheus espera, e não é contrato do produto. A proteção é de rede, e o
+proxy reverso o bloqueia (README, "Antes de ir para produção"). O rótulo das métricas HTTP é
+o molde da rota (`/vehicle/<int:vehicle_id>`), e URL desconhecida vira `unmatched`: com o
+caminho cru, qualquer varredura criaria uma série por URL inventada.
+
+No gunicorn, cada worker tem os próprios contadores, e uma coleta leria um worker qualquer.
+O `docker/gunicorn.conf.py` liga o modo multiprocess do `prometheus-client`, e o `/metrics`
+soma os arquivos de todos eles. O consumer é um processo só por réplica: expõe o registro
+em memória no servidor de saúde, e o Prometheus descobre as réplicas pelo DNS do compose.
+
+### Os alertas do pipeline
+Em `docker/prometheus/alerts.yml`:
+
+| Alerta | Condição | Por quê |
+|---|---|---|
+| `MensagensNaDLQ` | DLQ > 0 por 1 min | Nada vai para a DLQ em operação normal; alguém precisa olhar. |
+| `FilaAcimaDaMetadeDoTeto` | acima de 1 GiB por 5 min | No teto, o envio de lote vira 503. Metade dá tempo de agir. |
+| `ConsumerNaoPronto` | `consumer_ready == 0` por 2 min | Broker ou Mongo fora; 2 min absorvem uma reconexão normal. |
+| `LatenciaDoPipelineAlta` | p95 do recebimento à gravação > 60 s por 5 min | A fila está acumulando mais rápido do que drena. |
+| `CarimboPertoDaJanela` | p99 de `bronze_stamp_age_seconds` > 15 s por 5 min | É a premissa da janela de estabilização (30 s): se o carimbo envelhecer perto dela, a silver pode perder registro. |
+
+O plano pedia o **máximo** do carimbo. Ficou o p99: um histograma não guarda o máximo, e um
+gauge do máximo por réplica não soma entre elas. O limite de 15 s é metade da janela,
+folga suficiente para o erro de bucket.
 
 ### Lock de dependências versionado
 `requirements.txt` é a lista editada à mão (com faixas); `requirements.lock.txt` congela o

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from domain.ports import AuthorizedVehicle, SenderRelation
+from dubles import ObservadorEmMemoria
 from service.errors import ServiceUnavailableError
 from service.telemetry.ingest_rules import (
     IncomingRecord,
@@ -42,9 +43,10 @@ def _registro(vin: str, **raw_extra) -> dict:
     return {"id": record_id, "vin": vin, "collected_at": COLETA, "raw": raw}
 
 
-def _servico(fila, vins=None, retry_after=30):
+def _servico(fila, vins=None, retry_after=30, observador=None):
     posse = PosseEmMemoria(vins or {MEU: AuthorizedVehicle(7, SenderRelation.OWNER)})
-    return TelemetryIngestService(posse, fila, retry_after), posse
+    observer = observador or ObservadorEmMemoria()
+    return TelemetryIngestService(posse, fila, retry_after, observer=observer), posse
 
 
 # --- Regras -----------------------------------------------------------------------
@@ -152,3 +154,45 @@ def test_cada_lote_publicado_tem_um_id_novo(fila_em_memoria):
     ids = {lote.message_id for lote in fila_em_memoria.publicados}
     assert len(ids) == 2
     assert all(isinstance(i, UUID) for i in ids)
+
+
+def _enviar(servico, registros):
+    return servico.ingest(sender_id=51, sender_name="joao", records=registros, request_id="r")
+
+
+def test_o_observador_ouve_o_lote_publicado_e_cada_recusa(fila_em_memoria, observador):
+    servico, _ = _servico(fila_em_memoria, observador=observador)
+    alheio = _registro(ALHEIO)
+
+    _enviar(servico, [_registro(MEU), alheio])
+
+    assert observador.nomes() == ["batch_published", "record_rejected"]
+    assert observador.de("batch_published")[0]["args"] == (fila_em_memoria.publicados[0],)
+    assert observador.de("batch_published")[0]["publish_seconds"] >= 0
+    assert observador.de("record_rejected") == [
+        {
+            "args": (),
+            "record_id": alheio["id"],
+            "vin": ALHEIO,
+            "reason": "vehicle_not_authorized",
+        }
+    ]
+
+
+def test_lote_sem_nenhum_aceito_conta_as_recusas_e_nao_publica(fila_em_memoria, observador):
+    servico, _ = _servico(fila_em_memoria, observador=observador)
+
+    _enviar(servico, [_registro(ALHEIO)])
+
+    assert observador.nomes() == ["record_rejected", "nothing_accepted"]
+
+
+def test_o_503_nao_conta_recusa_porque_o_app_vai_reenviar(fila_em_memoria, observador):
+    """O reenvio contaria o mesmo registro recusado outra vez."""
+    fila_em_memoria.falhar = True
+    servico, _ = _servico(fila_em_memoria, observador=observador)
+
+    with pytest.raises(ServiceUnavailableError):
+        _enviar(servico, [_registro(MEU), _registro(ALHEIO)])
+
+    assert observador.nomes() == ["publish_failed"]

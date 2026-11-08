@@ -9,7 +9,7 @@ from blueprint.http_errors import error_responses
 from domain.authz import Permission
 from ext.auth import permission_required
 from ext.container import Container
-from instrumentation.request_context import current_request_id
+from instrumentation.correlation import current_request_id
 from schemas.telemetry_schema import BatchReceiptSchema, TelemetryBatchSchema
 from service.telemetry.ingest_service import TelemetryIngestService
 

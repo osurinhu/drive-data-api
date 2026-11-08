@@ -32,7 +32,7 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
   adaptadores de `repository/mongo/`) podem ser importadas. O `ext.mongo` importa de volta só o
   `repository.mongo.indexes`, que não importa `ext`. Algo novo que duas
   extensões precisem vira módulo neutro fora de `ext/`, como `instrumentation/` (que guarda o
-  `request_context.py`) ou o `blueprint/http_errors.py` — que não é folha (importa
+  `correlation.py`) ou o `blueprint/http_errors.py` — que não é folha (importa
   `service.errors`) e é usado só por extensões e rotas. Ele nunca importa `ext`, e o
   `blueprint/__init__.py` fica sem import: a rota importa `ext.auth`, que importa
   `blueprint.http_errors`, e qualquer um dos dois fecharia o ciclo. Vocabulário puro vira folha

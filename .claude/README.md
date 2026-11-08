@@ -528,3 +528,14 @@ sugestão que restava, um contrato para o método de escrita sem `@permission_re
     listagem; o traceback do servidor de saúde quando o cliente desiste; o `import pika` em `ext/`.
     Mantidos: repetir para sempre erro permanente do broker (sair com 1 também reiniciaria sem
     fim, e o `unhealthy` e o aviso dizem o motivo); a DLQ sem teto; o pika em `CRITICAL`.
+- 2026-11-08 — **Fase 6 do pipeline (observabilidade).** Logs JSON com `event` e correlação em
+  `contextvars` (`instrumentation/correlation.py`, que substitui o `request_context.py`); o log de
+  acesso saiu do gunicorn para `ext/observability.py`; `/metrics` nos três processos, com
+  multiprocess no gunicorn (`docker/gunicorn.conf.py`); quatro portas de observação em
+  `domain/ports.py`, com os adaptadores em `instrumentation/metrics.py`; Prometheus e Grafana no
+  perfil `observabilidade`; receita 14. `instrumentation` passa a poder importar as folhas do
+  domínio, e o `test_fronteiras.py` guarda a lista dos módulos comuns. Os dois smokes procuram
+  agora o `request_id` nos logs JSON, e o `/smoke-pipeline` confere o Prometheus
+  (`observabilidade.py`). Desvio do plano: o alerta do carimbo usa o p99, porque histograma não
+  guarda o máximo. Sugestões do `revisor-arquitetura` aplicadas (o docstring do servidor de saúde
+  e o teste da fronteira). `/verificar tudo` com 607 testes.

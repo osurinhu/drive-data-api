@@ -10,6 +10,7 @@ Assim o processo consumer não carrega o SQLAlchemy nem o JWT
 from dependency_injector import containers, providers
 from flask import Flask
 
+from instrumentation.metrics import BronzeMetrics, ConsumerMetrics
 from messaging.consumer import RabbitTelemetryConsumer
 from repository.mongo.bronze_writer import MongoBronzeWriter
 from repository.mongo.rejection_log import MongoRejectionLog
@@ -23,8 +24,13 @@ class ConsumerContainer(containers.DeclarativeContainer):
 
     bronze_writer = providers.Factory(MongoBronzeWriter, timeout=config.bronze.write_timeout)
     rejection_log = providers.Factory(MongoRejectionLog, timeout=config.bronze.write_timeout)
+    bronze_observer = providers.Factory(BronzeMetrics)
+    consumer_observer = providers.Factory(ConsumerMetrics)
     bronze_ingest_service = providers.Factory(
-        BronzeIngestService, writer=bronze_writer, rejections=rejection_log
+        BronzeIngestService,
+        writer=bronze_writer,
+        rejections=rejection_log,
+        observer=bronze_observer,
     )
 
     # Factory: o consumidor guarda a conexão do próprio `run`, e cada `flask consumer
@@ -37,6 +43,7 @@ class ConsumerContainer(containers.DeclarativeContainer):
         connection_name=config.amqp.consumer_connection_name,
         prefetch=config.amqp.prefetch,
         handler=bronze_ingest_service.provided.ingest,
+        observer=consumer_observer,
     )
 
 

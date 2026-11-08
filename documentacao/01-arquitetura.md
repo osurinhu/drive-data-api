@@ -99,7 +99,7 @@ E a infraestrutura, fora do caminho da requisição:
 |---|---|
 | `app/ext/` | Extensões. **Cada módulo expõe exatamente uma função `init_app(app)`** — é essa convenção que permite o carregador tratá-las de forma uniforme. |
 | `app/blueprint/http_errors.py` | Envelope de erro e o mapa exceção → status HTTP. Mora na camada HTTP, fora de `ext/`, porque é usado por duas extensões diferentes e pelas rotas; se morasse numa extensão, a outra passaria a depender dela. |
-| `app/instrumentation/` | O servidor de saúde do consumer (`consumer_health.py`, só com a stdlib) e as peças de observação usadas por mais de uma extensão: o registro das sondas do health (`probes.py`; cada extensão que conecta um serviço registra a sua, e a rota do health executa as registradas) e o id da requisição (`request_context.py`), que vai para o log e para o envelope de erro. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
+| `app/instrumentation/` | O servidor de saúde do consumer (`consumer_health.py`), o formato dos logs (`logs.py`), as métricas com os adaptadores das portas de observação (`metrics.py`) e as peças de observação usadas por mais de uma extensão: o registro das sondas do health (`probes.py`; cada extensão que conecta um serviço registra a sua, e a rota do health executa as registradas) e os ids de correlação (`correlation.py`, em `contextvars`, sem Flask), que vão para cada linha de log e para o envelope de erro. Fica fora de `ext/` pelo motivo do `http_errors.py`. |
 | `app/messaging/` | Tudo que fala com o RabbitMQ: os parâmetros de conexão e a sonda (`connection.py`, com pika), o cliente da API de gerenciamento (`management.py`, só stdlib), a topologia (`topology.py`: fila, DLX, DLQ e a policy), a operação da DLQ (`dead_letters.py`), o publisher dos lotes (`publisher.py`), que implementa a porta `TelemetryPublisher`, e o consumer da fila (`consumer.py`), que decodifica pelo contrato, entrega o lote a um handler e decide o destino de cada mensagem (ack, DLQ, de volta à fila). Recebe URL, prazos e o handler de quem chama e não importa `ext`, `repository`, `service` nem `blueprint`. |
 
 ---
@@ -115,7 +115,7 @@ repository.mongo → folhas do domínio (as portas), ext.mongo
 domínio   →  o ORM, o SQLAlchemy e o próprio domínio; as folhas, só outras folhas
 schema    →  folhas do domínio
 messaging →  folhas do domínio (o contrato e as portas)
-instrumentation  →  (nada do projeto)
+instrumentation  →  folhas do domínio (o contrato e as portas que implementa)
 ```
 
 As extensões são a raiz de composição e importam das camadas o que precisam montar. Duas
@@ -346,8 +346,10 @@ app/
   app.py                     create_app() — não conhece nenhuma extensão
   instrumentation/
     probes.py                registro das sondas do health
-    request_context.py       id da requisição
-    consumer_health.py       servidor de saúde do consumer (/health/live e /health/ready)
+    correlation.py           request_id, message_id e user_id, em contextvars
+    logs.py                  uma linha JSON por evento (LOG_FORMAT)
+    metrics.py               instrumentos do Prometheus e adaptadores das portas de observação
+    consumer_health.py       servidor de saúde do consumer (/health/live, /health/ready e /metrics)
   messaging/                 RabbitMQ
     connection.py            parâmetros de conexão (pika) + sonda do broker
     management.py            cliente da API de gerenciamento (vhosts, permissões, filas, policies)
@@ -368,7 +370,8 @@ app/
                              a saúde em :8081
     api.py                   flask-smorest + blueprint /api/v1 + segurança global
     auth.py                  JWT, decorator de permissão, escopo de ownership
-    observability.py         request id + nível de log
+    observability.py         logs, correlação e log de acesso
+    metrics.py               /metrics dos processos HTTP e contagem das requisições
     cors.py                  origens permitidas
     error_handler.py         registra os handlers a partir do mapa
     commands.py              comandos `flask ...`

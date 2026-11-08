@@ -14,6 +14,7 @@ publisher. Quem conecta a cada serviço externo são as extensões do perfil
 from dependency_injector import containers, providers
 from flask import Flask
 
+from instrumentation.metrics import BronzeReadMetrics, IngestMetrics
 from messaging.publisher import RabbitTelemetryPublisher
 from repository.mongo.bronze_reader import MongoBronzeReader
 from repository.sql.refresh_token_repository import RefreshTokenRepository
@@ -59,6 +60,10 @@ class Container(containers.DeclarativeContainer):
     # Factory: o leitor não guarda conexão; o cliente é do `ext.mongo`, um por processo.
     bronze_reader = providers.Factory(MongoBronzeReader, timeout=config.bronze.read_timeout)
 
+    # --- Observação -------------------------------------------------------------
+    ingest_observer = providers.Factory(IngestMetrics)
+    bronze_read_observer = providers.Factory(BronzeReadMetrics)
+
     # --- Services -------------------------------------------------------------
     user_service = providers.Factory(
         UserService, repository=user_repository, tokens=refresh_token_repository
@@ -81,9 +86,13 @@ class Container(containers.DeclarativeContainer):
         authorization=vehicle_repository,
         publisher=telemetry_publisher,
         retry_after_seconds=config.ingest.retry_after_seconds,
+        observer=ingest_observer,
     )
     bronze_read_service = providers.Factory(
-        BronzeReadService, reader=bronze_reader, settle_seconds=config.bronze.settle_seconds
+        BronzeReadService,
+        reader=bronze_reader,
+        settle_seconds=config.bronze.settle_seconds,
+        observer=bronze_read_observer,
     )
 
 

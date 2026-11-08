@@ -15,7 +15,7 @@ from flask import Flask, current_app
 from werkzeug.exceptions import HTTPException
 
 from blueprint.http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
-from instrumentation.request_context import current_request_id
+from instrumentation.correlation import current_request_id
 from service.errors import ServiceError, ServiceUnavailableError
 
 

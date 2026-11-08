@@ -1,5 +1,6 @@
 """Recebimento dos lotes do app (producer): posse por registro e publicação na fila."""
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -7,7 +8,12 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from domain.contracts.telemetry_batch import Sender, TelemetryBatchV1
-from domain.ports import PublishFailed, TelemetryPublisher, VehicleAuthorization
+from domain.ports import (
+    IngestObserver,
+    PublishFailed,
+    TelemetryPublisher,
+    VehicleAuthorization,
+)
 from service.errors import ServiceUnavailableError
 from service.telemetry.ingest_rules import (
     IncomingRecord,
@@ -36,10 +42,13 @@ class TelemetryIngestService:
         authorization: VehicleAuthorization,
         publisher: TelemetryPublisher,
         retry_after_seconds: int,
+        *,
+        observer: IngestObserver,
     ) -> None:
         self._authorization = authorization
         self._publisher = publisher
         self._retry_after_seconds = retry_after_seconds
+        self._observer = observer
 
     def ingest(
         self,
@@ -64,6 +73,8 @@ class TelemetryIngestService:
         accepted, rejected = partition_by_authorization(incoming, authorized, sender_name)
 
         if not accepted:
+            self._report_rejected(rejected)
+            self._observer.nothing_accepted()
             return IngestReceipt(
                 batch_id=None, received_at=received_at, accepted=0, rejected=list(rejected)
             )
@@ -75,16 +86,26 @@ class TelemetryIngestService:
             sender=Sender(user_id=sender_id),
             records=accepted,
         )
+        started = time.monotonic()
         try:
             self._publisher.publish(batch)
         except PublishFailed as error:
+            self._observer.publish_failed(batch, reason=str(error))
             raise ServiceUnavailableError(
                 UNAVAILABLE_MESSAGE, retry_after=self._retry_after_seconds
             ) from error
 
+        self._observer.batch_published(batch, publish_seconds=time.monotonic() - started)
+        self._report_rejected(rejected)
         return IngestReceipt(
             batch_id=batch.message_id,
             received_at=received_at,
             accepted=len(accepted),
             rejected=list(rejected),
         )
+
+    def _report_rejected(self, rejected: Sequence[RejectedRecord]) -> None:
+        for record in rejected:
+            self._observer.record_rejected(
+                record_id=record.id, vin=record.vin, reason=str(record.reason)
+            )

@@ -14,7 +14,8 @@ destino de cada mensagem" e "Parada e queda".
 
 - Do projeto, só importa as folhas do domínio (o contrato e as portas): nada de `ext`,
   `repository`, `service` nem `blueprint`. URL, credencial e prazos chegam por parâmetro, de quem
-  monta o objeto (a extensão ou o container). O pika só é importado aqui.
+  monta o objeto (a extensão ou o container). O pika só é importado aqui. O destino de cada
+  mensagem e a correlação saem pela porta `ConsumerObserver`, e não por log ou métrica daqui.
 - Os parâmetros de conexão saem de `connection_parameters`: uma tentativa só, os prazos do
   `settings.toml` valendo sobre os da URL e um `connection_name` que diz o processo. Nada monta
   `pika.URLParameters` por conta própria.

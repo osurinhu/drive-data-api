@@ -61,8 +61,8 @@ def recusas():
 
 
 @pytest.fixture
-def servico(bronze, recusas):
-    return BronzeIngestService(bronze, rejections=recusas)
+def servico(bronze, recusas, observador):
+    return BronzeIngestService(bronze, rejections=recusas, observer=observador)
 
 
 def test_cada_registro_vira_uma_entrada_com_o_remetente_do_envelope(servico, bronze, novo_lote):
@@ -266,3 +266,30 @@ def test_sem_gravar_a_recusa_a_mensagem_nao_recebe_ack(servico, recusas, novo_lo
 )
 def test_as_metricas_disponiveis(raw, esperado):
     assert available_metrics(raw) == esperado
+
+
+def test_o_observador_recebe_o_que_aconteceu_com_cada_registro(servico, observador, novo_lote):
+    lote = novo_lote(registros=3)
+    servico.ingest(replace(lote, records=lote.records[:1]))
+    observador.chamadas.clear()
+    invalido = replace(lote.records[1], vin="invalido")
+
+    servico.ingest(replace(lote, records=(lote.records[0], invalido, lote.records[2])))
+
+    [gravado] = observador.de("batch_ingested")
+    assert gravado["args"] == (replace(lote, records=(lote.records[0], invalido, lote.records[2])),)
+    assert gravado["ingested_at"] == HORA_DO_SERVIDOR
+    assert gravado["stamp_age_seconds"] >= 0
+    assert gravado["inserted"] == 1
+    assert gravado["duplicates"] == {lote.records[0].record_id}
+    assert gravado["collisions"] == set()
+    assert gravado["invalid"] == {invalido.record_id}
+
+
+def test_o_bronze_fora_nao_conta_gravacao_nenhuma(servico, bronze, observador, novo_lote):
+    bronze.fora = True
+
+    with pytest.raises(BronzeUnavailable):
+        servico.ingest(novo_lote())
+
+    assert observador.chamadas == []

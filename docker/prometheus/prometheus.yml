@@ -1,0 +1,30 @@
+# Coleta do perfil `observabilidade` do compose. As réplicas do consumer vêm do DNS do
+# compose: um `--scale consumer=3` aparece sozinho, sem mudar este arquivo.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: api
+    static_configs:
+      - targets: ["api:5000"]
+
+  - job_name: bronze-api
+    static_configs:
+      - targets: ["bronze-api:5000"]
+
+  - job_name: consumer
+    dns_sd_configs:
+      - names: ["consumer"]
+        type: A
+        port: 8081
+        refresh_interval: 15s
+
+  - job_name: rabbitmq
+    # O /metrics do plugin soma por nó; os alertas precisam da profundidade por fila.
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: ["rabbitmq:15692"]

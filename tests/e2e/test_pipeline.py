@@ -24,7 +24,12 @@ ALHEIO = "9BWZZZ377VT004251"
 @pytest.fixture
 def sem_janela(app):
     app.container.bronze_read_service.override(
-        providers.Factory(BronzeReadService, reader=app.container.bronze_reader, settle_seconds=0)
+        providers.Factory(
+            BronzeReadService,
+            reader=app.container.bronze_reader,
+            settle_seconds=0,
+            observer=app.container.bronze_read_observer,
+        )
     )
     yield
     app.container.bronze_read_service.reset_override()

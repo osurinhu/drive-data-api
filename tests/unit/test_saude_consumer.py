@@ -113,4 +113,19 @@ def test_a_volta_do_mongo_aparece_na_pergunta_seguinte(servidor, situacao):
 
 
 def test_caminho_desconhecido_e_404(servidor):
-    assert _get(servidor(), "/metrics")[0] == 404
+    assert _get(servidor(), "/outra-coisa")[0] == 404
+
+
+@pytest.mark.parametrize(("consumindo", "esperado"), [(True, "1.0"), (False, "0.0")])
+def test_metrics_expoe_as_metricas_com_a_prontidao_do_momento(
+    servidor, situacao, consumindo, esperado
+):
+    situacao.consumindo = consumindo
+    server = servidor()
+
+    with urllib.request.urlopen(f"http://127.0.0.1:{server.port}/metrics", timeout=5) as resposta:
+        corpo = resposta.read().decode()
+        status = resposta.status
+
+    assert status == 200
+    assert f"consumer_ready {esperado}" in corpo

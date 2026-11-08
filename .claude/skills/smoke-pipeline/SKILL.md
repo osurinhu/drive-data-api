@@ -70,7 +70,7 @@ impresso.
 
 ## Quando o roteiro precisa mudar
 
-A correlação pelo `request_id` nos logs chega na Fase 6, como etapa nova do `fluxo.py` ou do
-`smoke.sh`. Mantenha o roteiro curto: os detalhes são do pytest (`tests/e2e/test_pipeline.py`
+O `smoke.sh` confere o `request_id` do lote nos logs do `api` e do `consumer`, e o
+`observabilidade.py` confere no Prometheus os alvos, as métricas e a taxa de descarte. Mantenha o roteiro curto: os detalhes são do pytest (`tests/e2e/test_pipeline.py`
 cobre o mesmo fluxo no processo); o smoke prova que os processos de verdade, montados pelo
 compose, fazem o mesmo.

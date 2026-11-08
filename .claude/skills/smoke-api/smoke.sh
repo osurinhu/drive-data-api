@@ -357,18 +357,29 @@ fi
 
 docker logs "$container" >"$tmp/app.log" 2>&1
 total=$((total + 1))
-no_log="$(grep -cE "req=smoke-$execucao-[0-9]+$" "$tmp/app.log")"
+no_log="$(grep -E "\"request_id\": \"smoke-$execucao-[0-9]+\"" "$tmp/app.log" | grep -c '"event": "http.access"')"
 if [ "$no_log" -eq "$n" ]; then
-  echo "OK      log de acesso: as $n requisições aparecem com o seu req="
+  echo "OK      log de acesso: as $n requisições aparecem em JSON com o seu request_id"
 else
   falhas=$((falhas + 1))
-  echo "FALHOU  log de acesso: $no_log de $n requisições com o seu req="
+  echo "FALHOU  log de acesso: $no_log de $n requisições com o seu request_id"
+fi
+
+# Fora do `requisicao` de propósito: o /metrics não entra na contagem do log de acesso.
+total=$((total + 1))
+curl -s --max-time 10 "http://127.0.0.1:$porta/metrics" >"$tmp/metrics"
+contadas="$(awk '/^http_requests_total\{/ { soma += $NF } END { printf "%d", soma }' "$tmp/metrics")"
+if [ "$contadas" -ge "$n" ] && grep -q 'route="/api/v1/vehicle/<int:vehicle_id>"' "$tmp/metrics"; then
+  echo "OK      /metrics soma os workers ($contadas requisições) e rotula pelo molde da rota"
+else
+  falhas=$((falhas + 1))
+  echo "FALHOU  /metrics: $contadas requisições contadas de pelo menos $n, ou sem o molde da rota"
 fi
 
 if [ "${#ids_com_falha[@]}" -gt 0 ]; then
   echo ">> linhas do log das requisições que falharam:"
   for r in "${ids_com_falha[@]}"; do
-    grep -F "req=$r" "$tmp/app.log" | sed 's/^/        /'
+    grep -F "\"request_id\": \"$r\"" "$tmp/app.log" | sed 's/^/        /'
   done
   if [ "$erro_servidor" -eq 1 ]; then
     echo ">> houve 5xx ou requisição sem resposta; fim do log do container:"

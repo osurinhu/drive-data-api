@@ -29,7 +29,8 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
   `(propriedades, corpo)`); `publicar(corpo)` (publica no exchange da telemetria, com
   confirmação); `novo_lote(registros)` (um `TelemetryBatchV1` válido); `fila_em_memoria` (o
   dublê `FilaEmMemoria` do `TelemetryPublisher`, com `publicados` e `falhar`);
-  `leitura_em_memoria` (o dublê `LeituraEmMemoria` do `BronzeReader`, com `agora`,
+  `observador` (dublê de qualquer porta de observação, de `tests/dubles.py`, com `nomes()`,
+  `de(nome)` e `chamadas`); `leitura_em_memoria` (o dublê `LeituraEmMemoria` do `BronzeReader`, com `agora`,
   `gravar(ingerido_ha)`, `fora` e `chamadas`). Em `tests/mongo/`, `mongo_avulso(nome, uri)`
   abre um Mongo em outro endereço (fora do ar, credencial errada).
 - A rota usa o dublê por `app.container.<provider>.override(providers.Object(dublê))`, com

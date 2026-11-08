@@ -231,7 +231,7 @@ Com `FLASK_PROCESS=api` no `.env`, a aplicação sobe como o processo `api` e ne
 ```
 app/
   app.py                  create_app(): factory; não conhece nenhuma extensão
-  instrumentation/        observação (sondas do health, id da requisição, saúde do consumer)
+  instrumentation/        observação (sondas do health, logs JSON, correlação, métricas, saúde do consumer)
   messaging/              RabbitMQ: conexão, sonda, API de gerenciamento, topologia, publisher e consumer
   ext/                    infraestrutura — cada módulo expõe init_app(app)
   domain/                 modelos ORM e o vocabulário puro (papéis e permissões, VIN, portas, contrato da fila)
@@ -387,14 +387,38 @@ que existe mas é de outro dono responde **404**. O papel é lido do banco a cad
 requisição, então promover ou rebaixar alguém vale na hora, sem esperar o token expirar.
 
 Toda requisição recebe um id: devolvido no header `X-Request-ID`, incluído no envelope de
-erro, em toda linha do log de acesso e nas linhas de erro. É o que torna um problema em
-produção investigável — o cliente relata o `request_id` que recebeu e você reconstrói o que
-aconteceu:
+erro e em toda linha de log, inclusive nas do consumer, porque ele viaja na mensagem da fila.
+É o que torna um problema em produção investigável — o cliente relata o `request_id` que
+recebeu e você reconstrói o que aconteceu:
 
 ```bash
-docker compose logs api | grep <request_id>
-# 172.19.0.1 "GET /api/v1/vehicle/ HTTP/1.1" 401 106 3187us req=<request_id>
+docker compose logs api consumer | grep <request_id>
+# {"ts": "...", "level": "INFO", "logger": "http.access", "message": "POST /api/v1/telemetry/batches 202",
+#  "process": "api", "request_id": "<request_id>", "user_id": 51, "event": "http.access", "status": 202, ...}
+# {"ts": "...", "logger": "instrumentation.metrics", "process": "consumer", "request_id": "<request_id>",
+#  "message_id": "...", "event": "bronze.batch.ingested", "inserted": 3, ...}
 ```
+
+Os logs saem em JSON, uma linha por evento. Para ler localmente, `FLASK_LOG_FORMAT=text`.
+
+Métricas e painéis ficam num perfil à parte do compose:
+
+```bash
+docker compose --profile observabilidade up -d
+# Prometheus em http://localhost:9090 (alertas em /alerts)
+# Grafana em http://localhost:3000 (admin / GRAFANA_ADMIN_PASSWORD), painel "Pipeline de telemetria"
+```
+
+Cada processo expõe `/metrics`: o `api` e o `bronze-api` na porta da aplicação, e o `consumer`
+em `:8081`, com as réplicas descobertas pelo DNS do compose. A taxa de descarte:
+
+```promql
+sum(rate(ingest_records_total{outcome="rejected"}[5m])) / sum(rate(ingest_records_total[5m]))
+```
+
+O que recusa no consumer está em `bronze_records_total{outcome=~"collision|invalid"}`. Os
+alertas e o porquê de cada limite estão em `documentacao/02-decisoes.md`, "Os alertas do
+pipeline".
 
 Detalhes e o raciocínio por trás:
 [documentacao/02-decisoes.md](documentacao/02-decisoes.md).
@@ -437,4 +461,7 @@ Detalhes e o raciocínio por trás:
       à rede interna. Ele é público e, a cada chamada, sonda as dependências (abre uma conexão
       AMQP e faz ping no Mongo), o que pode prender um worker por até
       `HEALTH_PROBE_TIMEOUT_SECONDS` por sonda. O `/health/live` não tem esse custo.
-- [ ] Colocar um proxy reverso com TLS na frente, repassando o `X-Request-ID`.
+- [ ] Colocar um proxy reverso com TLS na frente, repassando o `X-Request-ID` e bloqueando o
+      `/metrics`, que é público para o Prometheus alcançá-lo pela rede interna.
+- [ ] Definir `GRAFANA_ADMIN_PASSWORD` no `.env` e ligar um Alertmanager: o Prometheus do
+      perfil `observabilidade` avalia os alertas, mas ninguém é avisado.

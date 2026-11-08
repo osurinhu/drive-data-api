@@ -28,6 +28,7 @@ from flask import Flask
 from sqlalchemy import event
 
 from domain.authz import ANY_OWNER, Role
+from dubles import ObservadorEmMemoria
 from ext.config import PROCESS_ENVVAR, build_config
 
 DEFAULT_TEST_DATABASE_URI = "postgresql+psycopg://baseapi:baseapi@localhost:5432/baseapi_test"
@@ -361,6 +362,12 @@ def publicar(amqp_url, amqp_topology):
 
     yield _publicar
     connection.close()
+
+
+@pytest.fixture
+def observador():
+    """Dublê de qualquer porta de observação: ``nomes()`` e ``de(nome)``."""
+    return ObservadorEmMemoria()
 
 
 @pytest.fixture

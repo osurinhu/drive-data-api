@@ -22,6 +22,8 @@ em 02-decisoes, "O pipeline não herda o `BaseService`: depende só de portas".
   consumer; `bronze_read_service` é a silver. Um lado não importa o outro, e o `__init__.py`
   fica sem import. O fecho de imports de cada lado é conferido em
   `tests/unit/test_fronteiras.py`.
+- Métrica e log de evento não moram aqui: o serviço conta o fato à porta de observação que
+  recebe no construtor, sem padrão (03-como-estender §14).
 - Regra pura e sem estado vai em `*_rules.py`; o serviço orquestra (uma consulta por lote,
   publicação, tradução da falha da porta em exceção de serviço).
 - A falha de uma porta (`PublishFailed`, e na silver o `BronzeUnavailable`) vira exceção de

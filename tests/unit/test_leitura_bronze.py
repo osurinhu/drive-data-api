@@ -7,6 +7,7 @@ do adaptador. O adaptador contra o Mongo de verdade está em
 
 import base64
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -51,8 +52,8 @@ def bronze(leitura_em_memoria):
 
 
 @pytest.fixture
-def servico(bronze):
-    return BronzeReadService(bronze, settle_seconds=JANELA)
+def servico(bronze, observador):
+    return BronzeReadService(bronze, settle_seconds=JANELA, observer=observador)
 
 
 def _ler(servico, escopo, *, after=None, ingested_from=None, filters=NO_FILTERS, limit=10):
@@ -381,3 +382,29 @@ def test_a_mensagem_do_cursor_invalido_nao_explica_o_formato():
         BronzeQuerySchema().load({"cursor": _cursor({"v": 9, "t": 1, "id": ID})})
 
     assert erro.value.messages == {"cursor": ["Cursor inválido."]}
+
+
+def test_o_atraso_da_silver_e_o_que_falta_ate_a_marca_dagua(servico, bronze, observador):
+    bronze.gravar(JANELA + 100)
+    bronze.gravar(JANELA + 50)
+
+    _ler(servico, ANY_OWNER, limit=1)
+
+    assert observador.de("page_read") == [{"args": (), "records": 1, "lag_seconds": 100.0}]
+
+
+def test_sem_mais_paginas_o_atraso_e_zero(servico, bronze, observador):
+    bronze.gravar(JANELA + 100)
+
+    _ler(servico, ANY_OWNER, limit=10)
+
+    assert observador.de("page_read") == [{"args": (), "records": 1, "lag_seconds": 0.0}]
+
+
+def test_a_leitura_com_filtro_nao_mede_atraso(servico, bronze, observador):
+    bronze.gravar(JANELA + 100)
+    filtros = replace(NO_FILTERS, vin="93YBSR7RHEJ298116")
+
+    _ler(servico, ANY_OWNER, filters=filtros, limit=10)
+
+    assert observador.de("page_read")[0]["lag_seconds"] is None

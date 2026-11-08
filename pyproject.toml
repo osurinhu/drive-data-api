@@ -28,6 +28,7 @@ known-first-party = [
     "app",
     "blueprint",
     "domain",
+    "dubles",
     "ext",
     "instrumentation",
     "messaging",

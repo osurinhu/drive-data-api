@@ -17,6 +17,7 @@ from flask_jwt_extended import JWTManager, current_user, verify_jwt_in_request
 
 from blueprint.http_errors import error_response
 from domain.authz import ANY_OWNER, OwnerScope, Permission, has_permission
+from instrumentation.correlation import bind_correlation
 from repository.sql.user_repository import UserRepository
 from service.errors import PermissionDeniedError
 
@@ -40,7 +41,9 @@ def _user_lookup(_jwt_header: dict, jwt_payload: dict):
     este loader em todo ``verify_jwt_in_request()``. Preço deliberado — é o que
     faz um usuário excluído, ou rebaixado, perder o acesso na hora.
     """
-    return UserRepository().get_by_id(int(jwt_payload["sub"]))
+    user_id = int(jwt_payload["sub"])
+    bind_correlation(user_id=user_id)
+    return UserRepository().get_by_id(user_id)
 
 
 # --- Normalização dos erros de token -----------------------------------------

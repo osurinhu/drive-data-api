@@ -36,6 +36,8 @@ PROPAGATE_EXCEPTIONS = false
 MAX_CONTENT_LENGTH = 1048576
 
 LOG_LEVEL = "INFO"
+# json: uma linha por evento, com os ids de correlação. text: para ler localmente.
+LOG_FORMAT = "json"
 
 # --- Persistência -------------------------------------------------------------
 # Sem valor padrão de propósito: a URI precisa vir do ambiente.
@@ -155,6 +157,7 @@ CORS_ORIGINS = ["*"]
 # reprova se as duas coisas divergirem.
 EXTENSIONS = [
     "ext.observability",
+    "ext.metrics",
     "ext.database",
     "ext.mongo",
     "ext.rabbitmq",
@@ -195,6 +198,7 @@ API_V1_ROUTES = [
 [api]
 EXTENSIONS = [
     "ext.observability",
+    "ext.metrics",
     "ext.database",
     "ext.rabbitmq",
     "ext.container",
@@ -221,6 +225,7 @@ HEALTH_CRITICAL = ["database"]
 [bronze_api]
 EXTENSIONS = [
     "ext.observability",
+    "ext.metrics",
     "ext.database",
     "ext.mongo",
     "ext.container",

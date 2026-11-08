@@ -33,7 +33,7 @@ from pika.exceptions import AMQPError
 from pika.spec import Basic, BasicProperties
 
 from domain.contracts.telemetry_batch import ContractError, TelemetryBatchV1, decode
-from domain.ports import BronzeUnavailable
+from domain.ports import BronzeUnavailable, ConsumerObserver
 from messaging.connection import connection_parameters, describe_error
 from messaging.topology import QUEUE
 
@@ -59,6 +59,7 @@ class RabbitTelemetryConsumer:
         connection_name: str,
         prefetch: int,
         handler: Handler,
+        observer: ConsumerObserver,
         retry_initial: float = 0.5,
         retry_max: float = 30.0,
     ) -> None:
@@ -67,6 +68,7 @@ class RabbitTelemetryConsumer:
         )
         self._prefetch = prefetch
         self._handler = handler
+        self._observer = observer
         self._retry_initial = retry_initial
         self._retry_max = retry_max
         self._stopping = False
@@ -162,27 +164,32 @@ class RabbitTelemetryConsumer:
             # Chegou no mesmo lote de eventos do pedido de parada: volta sem contar.
             channel.basic_nack(tag, requeue=True)
             return
+        headers = properties.headers or {}
+        self._observer.message_started(
+            message_id=properties.message_id,
+            request_id=properties.correlation_id,
+            user_id=headers.get("sender_user_id"),
+        )
         try:
-            self._handle(channel, tag, properties, body)
+            self._handle(channel, tag, body)
         finally:
+            self._observer.message_finished()
             self._last_activity = time.monotonic()
 
-    def _handle(
-        self, channel: BlockingChannel, tag: int, properties: BasicProperties, body: bytes
-    ) -> None:
+    def _handle(self, channel: BlockingChannel, tag: int, body: bytes) -> None:
         try:
             batch = decode(body)
         except ContractError as error:
-            logger.warning(
-                "Mensagem %s fora do contrato, enviada à DLQ: %.300s", properties.message_id, error
-            )
             channel.basic_reject(tag, requeue=False)
+            self._observer.dead_lettered(reason=str(error))
             return
 
+        started = time.monotonic()
         try:
             self._handler(batch)
         except BronzeUnavailable as error:
             channel.basic_nack(tag, requeue=True)
+            self._observer.requeued(reason="bronze_unavailable")
             self._pause(batch, error)
             return
         except Exception:
@@ -192,15 +199,21 @@ class RabbitTelemetryConsumer:
                 batch.message_id,
             )
             channel.basic_reject(tag, requeue=True)
+            self._observer.requeued(reason="unexpected_error")
             return
 
         channel.basic_ack(tag)
+        self._observer.acked(seconds=time.monotonic() - started)
+        if self._failures:
+            self._observer.resumed()
         self._failures = 0
 
     def _pause(self, batch: TelemetryBatchV1, error: BronzeUnavailable) -> None:
         """Espera antes da próxima mensagem, sem perder o heartbeat: ``connection.sleep``
         continua atendendo o broker, e o ``time.sleep`` deixaria a conexão cair."""
         self._failures += 1
+        if self._failures == 1:
+            self._observer.paused()
         delay = self._delay(self._failures)
         logger.warning(
             "Bronze indisponível (%s): o lote %s volta para a fila; nova tentativa em %.1f s.",

@@ -30,6 +30,7 @@ FORA_DO_PERFIL = {
     "api": {"ext.mongo", "ext.consumer_container", "ext.consumer"},
     "bronze_api": {"ext.rabbitmq", "ext.consumer_container", "ext.consumer"},
     "consumer": {
+        "ext.metrics",
         "ext.database",
         "ext.container",
         "ext.auth",
@@ -39,6 +40,7 @@ FORA_DO_PERFIL = {
         "ext.api",
     },
     "setup": {
+        "ext.metrics",
         "ext.container",
         "ext.consumer_container",
         "ext.auth",

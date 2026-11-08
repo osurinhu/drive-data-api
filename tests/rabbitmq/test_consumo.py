@@ -10,6 +10,7 @@ import pytest
 
 from domain.contracts.telemetry_batch import encode
 from domain.ports import BronzeUnavailable
+from dubles import ObservadorEmMemoria
 from messaging.consumer import ConsumerFailed, RabbitTelemetryConsumer
 
 PORTA_FECHADA = "amqp://ninguem:nada@127.0.0.1:1/teste"
@@ -22,7 +23,7 @@ def _fila_vazia(bronze_queue):
 
 
 @pytest.fixture
-def consumidor(amqp_url):
+def consumidor(amqp_url, observador):
     """Fábrica de consumidores do vhost de testes, com pausa curta entre as falhas
     transitórias. O ``run(idle_timeout=1)`` drena a fila e para."""
 
@@ -34,6 +35,7 @@ def consumidor(amqp_url):
             connection_name="pytest:consumer",
             prefetch=20,
             handler=handler,
+            observer=observador,
             retry_initial=0.01,
             retry_max=0.05,
         )
@@ -179,7 +181,50 @@ def test_broker_fora_do_ar_vira_consumer_failed():
         connection_name="pytest:consumer",
         prefetch=1,
         handler=lambda _batch: None,
+        observer=ObservadorEmMemoria(),
     )
 
     with pytest.raises(ConsumerFailed):
         consumer.run(idle_timeout=1)
+
+
+def test_o_observador_ouve_o_destino_e_a_correlacao_de_cada_mensagem(
+    consumidor, observador, publicar, novo_lote
+):
+    publicar(b"isto nao e json", message_id="fora-do-contrato")
+    publicar(encode(novo_lote()))
+
+    consumidor(lambda _lote: None).run(idle_timeout=1)
+
+    assert observador.nomes() == [
+        "message_started",
+        "dead_lettered",
+        "message_finished",
+        "message_started",
+        "acked",
+        "message_finished",
+    ]
+    assert observador.de("message_started")[0]["message_id"] == "fora-do-contrato"
+
+
+def test_o_observador_ouve_a_pausa_e_a_volta_do_bronze(consumidor, observador, publicar, novo_lote):
+    publicar(encode(novo_lote()))
+    falhas = [BronzeUnavailable("Mongo fora (dublê)")]
+
+    def handler(_lote):
+        if falhas:
+            raise falhas.pop()
+
+    consumidor(handler).run(idle_timeout=1)
+
+    assert observador.nomes() == [
+        "message_started",
+        "requeued",
+        "paused",
+        "message_finished",
+        "message_started",
+        "acked",
+        "resumed",
+        "message_finished",
+    ]
+    assert observador.de("requeued") == [{"args": (), "reason": "bronze_unavailable"}]

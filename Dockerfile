@@ -53,15 +53,13 @@ ENTRYPOINT ["/srv/docker/entrypoint.sh"]
 # workers é configurável sem reconstruir a imagem.
 # Não use `--preload` sem descartar o engine no post_fork: os workers herdariam
 # o mesmo socket de conexão do pool e corromperiam a comunicação com o Postgres.
+# O log de acesso é da aplicação (ext/observability.py): uma linha JSON com a rota e o
+# request_id. O gunicorn.conf.py cuida das métricas entre os workers.
 CMD ["gunicorn", \
+     "--config", "/srv/docker/gunicorn.conf.py", \
      "--bind", "0.0.0.0:5000", \
      "--timeout", "30", \
      "--graceful-timeout", "30", \
-     "--access-logfile", "-", \
-     # `req=` vem do header de resposta que ext/observability.py define. Sem ele,
-     # o id só apareceria nas linhas de erro — e rastrear uma requisição
-     # qualquer pelo id relatado pelo cliente não funcionaria.
-     "--access-logformat", "%(h)s \"%(r)s\" %(s)s %(b)s %(D)sus req=%({x-request-id}o)s", \
      "app:create_app()"]
 
 # --- Estágio de desenvolvimento ----------------------------------------------

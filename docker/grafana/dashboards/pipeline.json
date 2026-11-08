@@ -1,0 +1,70 @@
+{
+  "uid": "pipeline-telemetria",
+  "title": "Pipeline de telemetria",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Registros por segundo",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "aceitos", "expr": "sum(rate(ingest_records_total{outcome=\"accepted\"}[5m]))" },
+        { "refId": "B", "legendFormat": "no bronze", "expr": "sum(rate(bronze_records_total{outcome=\"inserted\"}[5m]))" }
+      ]
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Taxa de descarte",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "recusados no envio", "expr": "sum(rate(ingest_records_total{outcome=\"rejected\"}[5m])) / sum(rate(ingest_records_total[5m]))" }
+      ]
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Mensagens nas filas",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{queue}}", "expr": "rabbitmq_queue_messages{queue=~\"bronze.telemetry.*\"}" }
+      ]
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Latência do recebimento à gravação (p95)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(pipeline_latency_seconds_bucket{job=\"consumer\"}[5m])))" }
+      ]
+    },
+    {
+      "id": 5, "type": "stat", "title": "Réplicas do consumer prontas",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(consumer_ready{job=\"consumer\"})" }
+      ]
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Atraso da silver",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "atraso", "expr": "max(bronze_silver_lag_seconds{job=\"bronze-api\"})" }
+      ]
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Requisições por status",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{status}}", "expr": "sum by (status) (rate(http_requests_total[5m]))" }
+      ]
+    }
+  ]
+}

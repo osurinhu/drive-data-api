@@ -11,7 +11,7 @@ from typing import Any
 from flask import jsonify
 from werkzeug.http import HTTP_STATUS_CODES
 
-from instrumentation.request_context import current_request_id
+from instrumentation.correlation import current_request_id
 from schemas.error_schema import ApiErrorSchema
 from service.errors import (
     AuthenticationError,

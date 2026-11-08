@@ -1,0 +1,50 @@
+# Os alertas do pipeline. O porquê de cada limite está em documentacao/02-decisoes.md,
+# "Os alertas do pipeline".
+groups:
+  - name: pipeline
+    rules:
+      - alert: MensagensNaDLQ
+        expr: rabbitmq_queue_messages{queue="bronze.telemetry.dlq"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Há mensagens na DLQ: flask rabbitmq dlq-list diz o motivo."
+
+      - alert: FilaAcimaDaMetadeDoTeto
+        # Metade de AMQP_QUEUE_MAX_BYTES (2 GiB).
+        expr: rabbitmq_queue_messages_bytes{queue="bronze.telemetry"} > 1073741824
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A fila passou da metade do teto: o envio de lote vai começar a dar 503."
+
+      - alert: ConsumerNaoPronto
+        expr: consumer_ready{job="consumer"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Uma réplica do consumer não está pronta: broker ou Mongo fora."
+
+      - alert: LatenciaDoPipelineAlta
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le) (rate(pipeline_latency_seconds_bucket{job="consumer"}[5m]))) > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "O p95 do recebimento à gravação passou de 60 s."
+
+      - alert: CarimboPertoDaJanela
+        # Metade de BRONZE_SETTLE_SECONDS (30 s): o que protege a silver de perder registro.
+        expr: >-
+          histogram_quantile(0.99,
+            sum by (le) (rate(bronze_stamp_age_seconds_bucket{job="consumer"}[5m]))) > 15
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gravar demora perto da janela de estabilização: a silver pode perder registro."

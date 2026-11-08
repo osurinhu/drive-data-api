@@ -20,3 +20,7 @@ services:
       # A janela de estabilização curta: o smoke espera o registro sair, em vez de
       # esperar os 30 s do settings.toml. O caminho é o mesmo.
       FLASK_BRONZE_SETTLE_SECONDS: "2"
+  prometheus:
+    ports: !reset []
+  grafana:
+    ports: !reset []

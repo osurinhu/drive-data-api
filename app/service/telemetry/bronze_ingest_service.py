@@ -1,14 +1,12 @@
 """Gravação dos lotes no bronze (consumer): um documento por registro, uma vez só."""
 
-import logging
+import time
 from dataclasses import dataclass
 from uuid import UUID
 
 from domain.contracts.telemetry_batch import TelemetryBatchV1
-from domain.ports import BronzeRejectionReason, BronzeWriter, RejectionLog
+from domain.ports import BronzeObserver, BronzeRejectionReason, BronzeWriter, RejectionLog
 from service.telemetry.bronze_rules import bronze_entry, bronze_rejection, has_canonical_vin
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,9 +22,12 @@ class BronzeIngestResult:
 
 
 class BronzeIngestService:
-    def __init__(self, writer: BronzeWriter, *, rejections: RejectionLog) -> None:
+    def __init__(
+        self, writer: BronzeWriter, *, rejections: RejectionLog, observer: BronzeObserver
+    ) -> None:
         self._writer = writer
         self._rejections = rejections
+        self._observer = observer
 
     def ingest(self, batch: TelemetryBatchV1) -> BronzeIngestResult:
         """Grava os registros do lote que ainda não estão no bronze.
@@ -42,11 +43,13 @@ class BronzeIngestService:
         gravação e o rastro são idempotentes.
         """
         ingested_at = self._writer.server_time()
+        stamped = time.monotonic()
         intact = [record for record in batch.records if has_canonical_vin(record)]
         invalid = [record for record in batch.records if not has_canonical_vin(record)]
 
         entries = [bronze_entry(batch, record, ingested_at) for record in intact]
         already_there = self._writer.insert_new(entries)
+        stamp_age_seconds = time.monotonic() - stamped
         collided = self._collisions(already_there, sender=batch.sender.user_id)
 
         rejections = [
@@ -65,21 +68,15 @@ class BronzeIngestService:
             collisions=len(collided),
             invalid=len(invalid),
         )
-        logger.info(
-            "Lote %s gravado no bronze: %d novo(s), %d já estava(m) lá.",
-            batch.message_id,
-            result.inserted,
-            result.duplicates,
+        self._observer.batch_ingested(
+            batch,
+            ingested_at=ingested_at,
+            stamp_age_seconds=stamp_age_seconds,
+            inserted=result.inserted,
+            duplicates=already_there - collided,
+            collisions=collided,
+            invalid={record.record_id for record in invalid},
         )
-        if rejections:
-            logger.warning(
-                "Lote %s: %d registro(s) recusado(s) no bronze (%d com id de outro remetente, "
-                "%d com VIN fora da forma).",
-                batch.message_id,
-                len(rejections),
-                result.collisions,
-                result.invalid,
-            )
         return result
 
     def _collisions(self, already_there: set[UUID], *, sender: int) -> set[UUID]:

@@ -52,7 +52,8 @@ cd "$raiz" || exit 2
 
 pasta=".claude/skills/smoke-pipeline"
 projeto="smoke-pipeline"
-P=(docker compose -p "$projeto" -f docker-compose.yml -f "$pasta/compose.override.yml")
+# O perfil entra aqui para o `down` levar também o Prometheus e o Grafana.
+P=(docker compose -p "$projeto" --profile observabilidade -f docker-compose.yml -f "$pasta/compose.override.yml")
 tmp="$(mktemp -d)"
 
 limpar() {
@@ -130,11 +131,31 @@ fi
 
 # Nenhum 5xx nos processos HTTP, nem traceback no consumer.
 if "${P[@]}" logs --no-log-prefix api bronze-api consumer 2>&1 |
-  grep -qE '" 5[0-9][0-9] |Traceback'; then
+  grep -qE '"status": 5[0-9][0-9]|Traceback'; then
   echo "FALHOU  houve 5xx ou traceback nos logs"
   resultado=1
 else
   echo "OK      nenhum 5xx nem traceback nos logs do api, do bronze-api e do consumer"
+fi
+
+# O pronto da Fase 6: um grep pelo request_id acha a requisição nos dois processos.
+marca="\"request_id\": \"smoke-pipeline-$execucao\""
+no_api="$("${P[@]}" logs --no-log-prefix api 2>&1 | grep -F "$marca" | grep -c '"event": "http.access"')"
+no_consumer="$("${P[@]}" logs --no-log-prefix consumer 2>&1 | grep -F "$marca" | grep -c '"event": "bronze.batch.ingested"')"
+if [ "$no_api" -ge 1 ] && [ "$no_consumer" -ge 1 ]; then
+  echo "OK      o request_id do lote aparece no log do api ($no_api) e no do consumer ($no_consumer)"
+else
+  echo "FALHOU  request_id nos logs: api $no_api, consumer $no_consumer"
+  resultado=1
+fi
+
+echo ">> observabilidade: Prometheus coletando os processos"
+if "${P[@]}" up -d --wait --wait-timeout 120 --no-deps prometheus >"$tmp/prometheus.log" 2>&1; then
+  "${P[@]}" exec -T api python - <"$pasta/observabilidade.py" || resultado=1
+else
+  echo "FALHOU  o Prometheus não subiu:"
+  tail -n 10 "$tmp/prometheus.log" | sed 's/^/        /'
+  resultado=1
 fi
 
 # --- O caos ---------------------------------------------------------------------
@@ -241,7 +262,7 @@ if [ "$resultado" -eq 0 ]; then
 
   # Os 503 agora são esperados; 500 e traceback, não.
   erros="$("${P[@]}" logs --no-log-prefix api bronze-api consumer 2>&1 |
-    grep -E -A12 '" 50[0124-9] |" 5[1-9][0-9] |Traceback')"
+    grep -E -A12 '"status": 50[0124-9]|"status": 5[1-9][0-9]|Traceback')"
   if [ -n "$erros" ]; then
     echo "FALHOU  houve erro interno ou traceback nos logs durante o caos:"
     head -n 30 <<<"$erros" | cut -c1-200 | sed 's/^/        /'

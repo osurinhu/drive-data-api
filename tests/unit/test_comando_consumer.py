@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from flask import Flask
 
+from dubles import ObservadorEmMemoria
 from ext import consumer as ext_consumer
 from instrumentation.probes import register_probe
 from messaging.consumer import ConsumerFailed, RabbitTelemetryConsumer
@@ -87,6 +88,7 @@ def consumidor_real():
         connection_name="pytest:consumer",
         prefetch=1,
         handler=lambda _batch: None,
+        observer=ObservadorEmMemoria(),
         retry_initial=1.0,
         retry_max=4.0,
     )

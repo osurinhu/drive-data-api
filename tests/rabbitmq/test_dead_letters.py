@@ -8,6 +8,7 @@ import pika
 import pytest
 
 from domain.contracts.telemetry_batch import ROUTING_KEY, encode
+from dubles import ObservadorEmMemoria
 from messaging.connection import connection_parameters
 from messaging.consumer import RabbitTelemetryConsumer
 from messaging.dead_letters import DeadLettersFailed, list_dead_letters, requeue_dead_letters
@@ -90,6 +91,7 @@ def test_a_listagem_mostra_o_motivo_de_uma_mensagem_recusada_de_verdade(
         connection_name="pytest:consumer",
         prefetch=1,
         handler=lambda _batch: None,
+        observer=ObservadorEmMemoria(),
     ).run(idle_timeout=1)
 
     [carta] = _listar_quando_chegarem(parametros, 1)
@@ -244,6 +246,7 @@ def test_a_mensagem_republicada_ganha_um_limite_de_entregas_novo(
             connection_name="pytest:consumer",
             prefetch=1,
             handler=bug,
+            observer=ObservadorEmMemoria(),
         ).run(idle_timeout=1)
 
     consumir()

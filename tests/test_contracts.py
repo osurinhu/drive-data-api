@@ -7,12 +7,11 @@ poderia divergir silenciosamente.
 
 from dataclasses import fields
 
-from flask import g
-
 from blueprint.http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
 from domain.authz import ROLE_PERMISSIONS, Permission, Role
 from domain.ports import BronzeEntry
 from ext.api import api
+from instrumentation.correlation import bind_correlation, clear_correlation
 from instrumentation.probes import registered_probes
 from schemas.bronze_schema import BronzePageSchema, BronzeRecordSchema
 from schemas.error_schema import ApiErrorSchema
@@ -92,8 +91,9 @@ def test_envelope_de_erro_do_codigo_e_do_schema_nao_divergem(app):
     """O par do teste acima, para o envelope de erro: `blueprint.http_errors` monta e
     `ApiErrorSchema` documenta, e é o schema que o cliente lê no OpenAPI."""
     with app.test_request_context():
-        g.request_id = "um-id-qualquer"
+        bind_correlation(request_id="um-id-qualquer")
         resposta, _ = error_response(404, "mensagem")
+        clear_correlation()
         chaves = set(resposta.get_json())
 
     # `errors` só aparece nos 422 que o próprio flask-smorest monta.

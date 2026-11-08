@@ -138,6 +138,28 @@ def test_o_init_dos_pacotes_de_vocabulario_e_do_pipeline_nao_importa_nada(pacote
     assert _importados(APP / pacote / "__init__.py") == set()
 
 
+#: Carregados pelos três processos: é o que o ``/metrics`` e os adaptadores têm em comum.
+OBSERVACAO = ("correlation", "logs", "metrics", "consumer_health")
+
+
+@pytest.mark.parametrize("modulo", OBSERVACAO)
+def test_a_observacao_so_importa_stdlib_prometheus_folhas_e_a_si_mesma(modulo):
+    """Falhou? O módulo é comum aos dois lados da fila: uma dependência de infraestrutura
+    aqui chegaria ao processo que não pode tê-la (invariante 8). Quem precisa do Mongo,
+    do pika ou do Flask é adaptador ou extensão, e não instrumentação."""
+    importados = _importados(APP / "instrumentation" / f"{modulo}.py")
+
+    def permitido(nome: str) -> bool:
+        raiz = nome.split(".")[0]
+        return (
+            raiz in sys.stdlib_module_names
+            or raiz in {"prometheus_client", "instrumentation"}
+            or _e_folha(nome)
+        )
+
+    assert sorted(nome for nome in importados if not permitido(nome)) == []
+
+
 @pytest.mark.parametrize("modulo", sorted(ORM))
 def test_o_orm_so_importa_sqlalchemy_e_o_dominio(modulo):
     """O ORM mapeia tabela para classe. Se ele precisa de serviço, repositório ou

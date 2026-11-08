@@ -1,6 +1,6 @@
 # Como estender
 
-Treze receitas, da mais comum para a mais rara. Em todas, use `Vehicle` como molde: modelo,
+Catorze receitas, da mais comum para a mais rara. Em todas, use `Vehicle` como molde: modelo,
 repositório, serviço, schemas, rota e testes.
 
 | Quero… | Vá para |
@@ -18,6 +18,7 @@ repositório, serviço, schemas, rota e testes.
 | Mudar a mensagem que atravessa a fila | [11](#11-contrato-da-fila) |
 | Um metadado novo no documento do bronze, um filtro da silver ou um índice | [12](#12-bronze) |
 | Um sub-recurso que herda a posse de outro (os motoristas do veículo) | [13](#13-sub-recurso) |
+| Uma métrica ou um evento de log novo no pipeline | [14](#14-métrica-ou-evento-novo) |
 
 No fim há um [checklist de revisão](#checklist-de-revisão).
 
@@ -862,6 +863,26 @@ serviço do pai"). Molde: os arquivos `vehicle_driver_*`, a rota `vehicle_driver
    operação alcança; o filho que some quando o pai é excluído; e o custo da listagem,
    com filhos de pessoas diferentes, em `tests/test_read_cost.py` (medido com o
    `/medir-consultas`).
+
+---
+
+## 14. Métrica ou evento novo
+
+O serviço do pipeline não importa `prometheus_client` nem escreve o log do evento: ele conta
+o que aconteceu a uma porta de observação (02-decisoes, "Portas de observação").
+
+1. **A porta** (`app/domain/ports.py`): um método novo no observador do lado certo, com o
+   acontecimento no nome e os dados em argumentos nomeados (`batch_published`, não
+   `increment_counter`).
+2. **O adaptador** (`app/instrumentation/metrics.py`): o instrumento, global no módulo, e o
+   método que o incrementa e loga com `extra={"event": "dominio.coisa.aconteceu", ...}`.
+   Rótulo só com valores de um conjunto fechado: id, VIN e URL criariam uma série por valor.
+3. **O serviço** chama `self._observer.<método>(...)` onde o fato acontece.
+4. **Os testes**: em `tests/unit/`, o serviço com a fixture `observador`
+   (`observador.nomes()`, `observador.de("método")`), e o adaptador em
+   `tests/unit/test_metricas.py`, comparando o contador antes e depois.
+5. Virou alerta? `docker/prometheus/alerts.yml` e a tabela em 02-decisoes. Virou painel?
+   `docker/grafana/dashboards/pipeline.json`.
 
 ---
 

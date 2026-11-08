@@ -49,6 +49,10 @@ Decisões em 02-decisoes, seções Operação e Qualidade; o runbook é o `READM
 - Workers vêm de `WEB_CONCURRENCY`; ao mudar, refaça a conta
   `workers × (pool_size + max_overflow) ≤ max_connections`. Nada de `--preload` sem descartar o
   engine no `post_fork`.
+- O gunicorn sobe com `docker/gunicorn.conf.py`, que liga o modo multiprocess do
+  `prometheus-client` só no processo dele. Prometheus e Grafana ficam no perfil
+  `observabilidade`: senha com `:-`, nunca `:?`, porque o compose interpola o arquivo inteiro
+  mesmo sem o perfil.
 - Scripts `.sh` ficam em LF (`.gitattributes`): com CRLF, o `entrypoint.sh` derruba o container.
 - As portas do `db` (5432), do `mongo` (27017) e do `rabbitmq` (5672 e 15672), o bind mount de
   `./migrations` no `api` e o limite de cache do Mongo são conveniências de desenvolvimento e

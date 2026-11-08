@@ -1,11 +1,12 @@
 """O servidor de saúde do consumer, numa thread do próprio processo.
 
 O consumer não tem HTTP: os dois caminhos daqui são o que o healthcheck do compose (e
-um orquestrador) pergunta a ele. Só a stdlib: são dois caminhos, e o processo não tem
-servidor WSGI.
+um orquestrador) pergunta a ele. O servidor HTTP é o da stdlib: são poucos caminhos, e
+o processo não tem servidor WSGI.
 
 * ``/health/live``: o processo está de pé;
-* ``/health/ready``: conectado ao broker, consumindo e com o Mongo respondendo.
+* ``/health/ready``: conectado ao broker, consumindo e com o Mongo respondendo;
+* ``/metrics``: as métricas do processo, para o Prometheus.
 
 O Mongo é sondado à parte da fila porque, com a fila vazia, ninguém descobriria que
 ele caiu. O ``ping`` que deu certo vale por ``bronze_ttl`` segundos, para o health não
@@ -21,6 +22,8 @@ import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+from instrumentation.metrics import CONSUMER_READY, render
 
 logger = logging.getLogger(__name__)
 
@@ -99,13 +102,19 @@ class ConsumerHealthServer:
                     self._reply(200, {"status": "ok"})
                 elif self.path == "/health/ready":
                     self._reply(*health.readiness())
+                elif self.path == "/metrics":
+                    status, _ = health.readiness()
+                    CONSUMER_READY.set(1 if status == 200 else 0)
+                    self._send(200, *render())
                 else:
                     self._reply(404, {"status": "not found"})
 
             def _reply(self, status: int, body: dict[str, Any]) -> None:
-                payload = json.dumps(body).encode()
+                self._send(status, json.dumps(body).encode(), "application/json")
+
+            def _send(self, status: int, payload: bytes, content_type: str) -> None:
                 self.send_response(status)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)

@@ -12,7 +12,7 @@ Siga o idioma do arquivo vizinho.
 - `documentacao/02-decisoes.md` — o porquê de cada escolha e o que foi descartado. Antes de
   "simplificar" algo que parece estranho, procure aqui: quase sempre é deliberado.
 - `documentacao/03-como-estender.md` — receitas (entidade, endpoint, consulta, regra, erro, campo,
-  extensão, comando CLI, configuração, autorização, contrato da fila, bronze, sub-recurso) e o
+  extensão, comando CLI, configuração, autorização, contrato da fila, bronze, sub-recurso, métrica) e o
   checklist de revisão. Toda implementação.
 - `README.md` — runbook: subir, testar, migrar, configurar.
 
