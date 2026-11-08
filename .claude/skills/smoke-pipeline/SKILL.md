@@ -21,19 +21,21 @@ um volume novo do RabbitMQ e o job `setup`. O roteiro:
 2. sobe o compose inteiro nesse projeto, com o `compose.override.yml` desta pasta: volumes
    próprios, nenhuma porta no host e a janela de estabilização do bronze-api em 2 s
    (`FLASK_BRONZE_SETTLE_SECONDS`), para o smoke não esperar os 30 s do `settings.toml`;
-3. cria a gestora (`usuario`) e a silver (`silver`) com `flask create-user` e senha aleatória;
+3. cria a gestora e o motorista (`usuario`) e a silver (`silver`) com `flask create-user` e
+   senha aleatória;
 4. roda o `fluxo.py` dentro do container do api, que fala com o api (`localhost:5000`) e com o
    bronze-api (`bronze-api:5000`, pela rede do projeto):
    - o health de cada processo mostra só as dependências do perfil dele;
    - a leitura do bronze não existe no api (404), o envio não existe no bronze-api (404), e a
      leitura dá 401 sem token, 403 para a gestora e 422 com cursor malformado;
-   - a gestora cadastra o veículo e envia um lote misto: 202 com 3 aceitos e o VIN alheio em
-     `rejected`;
+   - a gestora cadastra o veículo, adiciona o motorista e envia um lote misto: 202 com 3
+     aceitos e o VIN alheio em `rejected`;
    - a silver lê página a página (de 2 em 2) até receber os 3, com o remetente, o vínculo, o
      `request_id`, o `batch_id` e o bruto do envio;
-   - o app reenvia o mesmo lote e depois um lote novo de 1 registro. Com um consumer só, a fila
-     entrega na ordem: do cursor guardado, a silver recebe só o registro novo. É a prova de que
-     o reenvio não repetiu nada;
+   - o app reenvia o mesmo lote, e depois o motorista envia um lote novo de 1 registro. Com um
+     consumer só, a fila entrega na ordem: do cursor guardado, a silver recebe só o registro
+     novo, com o remetente e o vínculo (`driver`) do motorista. É a prova de que o reenvio não
+     repetiu nada;
    - a página vazia devolve o cursor recebido, e a releitura do começo tem 4 registros;
 5. confere a fila e a DLQ vazias e nenhum 5xx ou traceback nos logs dos três processos;
 6. apaga o projeto inteiro (containers, volumes e imagens), também quando falha ou é

@@ -58,7 +58,7 @@ grafo do lado HTTP.
 | Perfil | Quem roda | Dependências | Rotas |
 |---|---|---|---|
 | `[default]` (sem `FLASK_PROCESS`) | desenvolvimento local e a suíte de testes | todas: é a união dos perfis | todas |
-| `[api]` | serviço `api` do compose: login, as rotas de negócio e o recebimento dos lotes de telemetria, que ele publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item`, `vehicle`, `telemetry` |
+| `[api]` | serviço `api` do compose: login, as rotas de negócio e o recebimento dos lotes de telemetria, que ele publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item`, `vehicle`, `vehicle_driver`, `telemetry` |
 | `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que faz login e lê o bronze por cursor (`GET /bronze/records`) | Postgres e Mongo | `health`, `auth`, `bronze` |
 | `[consumer]` | serviço `consumer` do compose (`flask consumer run`): consome a fila `bronze.telemetry` e grava cada registro no bronze | Mongo e RabbitMQ (sem Postgres e sem JWT) | nenhuma |
 | `[setup]` | o job `setup`: migra, aplica a topologia do RabbitMQ e os índices do bronze e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação; RabbitMQ, pela API de gerenciamento (`flask rabbitmq setup`); Mongo (`flask mongo setup`) | nenhuma |
@@ -108,7 +108,7 @@ E a infraestrutura, fora do caminho da requisição:
 
 ```
 rota      →  serviço, schema, ext, instrumentation
-serviço   →  repositório, domínio
+serviço   →  repositório, domínio; o do sub-recurso, também o serviço do pai
 service.telemetry → folhas do domínio (portas, contrato, VIN), service.errors, service.pagination
 repository.sql   → domínio, ext.database
 repository.mongo → folhas do domínio (as portas), ext.mongo
@@ -129,6 +129,11 @@ Quando a extensão importa `blueprint.http_errors`, a dependência entre os dois
 nos dois sentidos (a rota importa `ext.auth`, que importa `blueprint.http_errors`). Ela fica sem
 ciclo porque o `blueprint/__init__.py` não importa nada e o `http_errors.py` não importa `ext`.
 Mantenha as duas coisas assim.
+
+Entre serviços, a seta corre num sentido só: o do sub-recurso recebe o serviço do pai (o
+`VehicleDriverService` recebe o `VehicleService`), e o pai recebe só o **repositório** do
+filho, para desligar os filhos no `before_delete`. O pai que chamasse o serviço do filho
+fecharia um ciclo de import e de DI.
 
 As sondas do health são a única ressalva ao "SQL só no repositório": o `SELECT 1` de
 `ext/database.py` (e o `ping` de `ext/mongo.py`) verifica a conexão e não lê dado nenhum.
@@ -283,6 +288,12 @@ próprio.
 | O papel não tem a permissão da operação | **403** — decidido antes de tocar em dado algum, não revela nada |
 | Tem a permissão, mas o recurso é de outro dono | **404** — um 403 confirmaria que o recurso existe |
 
+O **sub-recurso** (os motoristas do veículo) não tem dono próprio: herda o do pai. O serviço
+dele recebe o serviço do pai e começa toda operação do gestor por `get_by_id(pai_id,
+owner_scope)`, que dá o 404 do pai de outro dono antes de o filho ser tocado. A visão da outra
+ponta do vínculo (o motorista) não passa pelo pai: filtra pelo id dele, vindo do token
+(03-como-estender §13).
+
 ### Erros
 
 A rota não trata erro. O serviço levanta uma exceção de `app/service/errors.py`, e o mapa
@@ -361,7 +372,7 @@ app/
     commands.py              comandos `flask ...`
   domain/                    o ORM (base, models) e as folhas (o resto)
     base.py                  BaseModel (campos de controle, convenção de nomes)
-    models.py                User, Item, Vehicle
+    models.py                User, Item, Vehicle, VehicleDriver
     authz.py                 papéis, permissões, o mapa entre eles e o escopo de dono
                              (ANY_OWNER) (folha)
     vin.py                   formato e forma canônica do VIN (folha)
@@ -373,7 +384,10 @@ app/
       base_repository.py     CRUD genérico
       user_repository.py     uma linha: amarra o modelo
       item_repository.py
-      vehicle_repository.py  + authorized_vins: a posse para o envio (uma consulta por lote)
+      vehicle_repository.py  + authorized_vins: a posse para o envio, de gestor ou de
+                             motorista (uma consulta por lote)
+      vehicle_driver_repository.py  os vínculos de motorista (joinedload das três relações);
+                             desliga os de um veículo excluído
     mongo/                   pymongo: o bronze
       bronze_document.py     BronzeEntry ↔ documento: o único lugar que conhece o layout
       server.py              o prazo de cada operação, a falha da infraestrutura
@@ -389,7 +403,8 @@ app/
     auth_service.py          verificação de credenciais
     user_service.py
     item_service.py
-    vehicle_service.py       VIN na forma canônica e imutável
+    vehicle_service.py       VIN na forma canônica e imutável; a exclusão desliga os motoristas
+    vehicle_driver_service.py  motoristas: a posse herdada do veículo e a visão do motorista
     telemetry/               o pipeline: só portas e folhas, sem BaseService
       ingest_rules.py        producer: partição por posse, regras puras
       ingest_service.py      producer: posse do lote + publicação; o recibo (IngestReceipt)
@@ -403,6 +418,7 @@ app/
     auth_schema.py
     item_schema.py
     vehicle_schema.py
+    vehicle_driver_schema.py o motorista visto pelo gestor, e o veículo visto pelo motorista
     telemetry_schema.py      o lote do app e o recibo 202
     bronze_schema.py         a query da leitura, o codec do cursor e a página da silver
   blueprint/
@@ -412,6 +428,7 @@ app/
     auth.py                  token e identidade
     item.py                  CRUD da entidade de exemplo
     vehicle.py               cadastro de veículos (quem cadastra é o gestor)
+    vehicle_driver.py        /vehicle/<id>/drivers e /vehicle/driving: os motoristas
     telemetry.py             POST /telemetry/batches: o lote do app, a caminho da fila
     bronze.py                GET /bronze/records: a silver lê o bronze por cursor
 

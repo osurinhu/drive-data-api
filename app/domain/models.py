@@ -43,6 +43,8 @@ class User(BaseModel):
 
     items: Mapped[list["Item"]] = relationship(back_populates="owner")
     vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="owner")
+    #: Os vínculos de motorista: os veículos que o usuário dirige, de outros gestores.
+    driving: Mapped[list["VehicleDriver"]] = relationship(back_populates="driver")
 
     def __repr__(self) -> str:
         return f"<User id={self.id} name={self.name!r} role={self.role.value!r}>"
@@ -95,6 +97,42 @@ class Vehicle(BaseModel):
 
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     owner: Mapped["User"] = relationship(back_populates="vehicles")
+    drivers: Mapped[list["VehicleDriver"]] = relationship(back_populates="vehicle")
 
     def __repr__(self) -> str:
         return f"<Vehicle id={self.id} vin={self.vin!r} owner_id={self.owner_id}>"
+
+
+class VehicleDriver(BaseModel):
+    """Vínculo de motorista: o gestor do veículo autorizou o usuário a enviar dados dele.
+
+    Tirar o motorista é exclusão lógica do vínculo, e excluir o veículo desliga todos
+    os vínculos dele (``VehicleService.before_delete``).
+    """
+
+    __tablename__ = "vehicle_drivers"
+    __table_args__ = (
+        # Um vínculo ATIVO por par: a mesma pessoa não é motorista duas vezes do
+        # mesmo carro, e volta a poder ser depois de removida. É também o índice
+        # da consulta de posse do envio (`VehicleRepository.authorized_vins`).
+        Index(
+            "uq_vehicle_drivers_vehicle_driver_active",
+            "vehicle_id",
+            "driver_id",
+            unique=True,
+            postgresql_where=text("deleted = false"),
+        ),
+    )
+
+    vehicle_id: Mapped[int] = mapped_column(
+        ForeignKey("vehicles.id", ondelete="CASCADE"), index=True
+    )
+    vehicle: Mapped["Vehicle"] = relationship(back_populates="drivers")
+
+    driver_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    driver: Mapped["User"] = relationship(back_populates="driving")
+
+    def __repr__(self) -> str:
+        return (
+            f"<VehicleDriver id={self.id} vehicle_id={self.vehicle_id} driver_id={self.driver_id}>"
+        )

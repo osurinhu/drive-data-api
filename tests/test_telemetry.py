@@ -127,6 +127,50 @@ def test_o_campo_user_do_payload_nao_autoriza_nada(client, login, fila):
     assert fila.publicados == []
 
 
+def _motorista(client, da_gestora, veiculo: int, nome: str) -> str:
+    """Faz de ``nome`` motorista do veículo e devolve a URL dos motoristas dele."""
+    motoristas = f"/api/v1/vehicle/{veiculo}/drivers"
+    response = client.post(motoristas, json={"user_name": nome}, headers=da_gestora)
+    assert response.status_code == 201, response.get_json()
+    return motoristas
+
+
+def test_o_motorista_envia_pelo_veiculo_do_gestor(client, login, fila):
+    _, da_gestora = login("ana")
+    joao, do_motorista = login("joao")
+    veiculo = _cadastrar(client, da_gestora)
+    _motorista(client, da_gestora, veiculo, "joao")
+
+    response = client.post(URL, json={"records": [_registro(user="ana")]}, headers=do_motorista)
+
+    assert response.status_code == 202, response.get_json()
+    assert response.get_json()["accepted"] == 1
+    [lote] = fila.publicados
+    assert lote.sender.user_id == joao["id"]
+    [registro] = lote.records
+    assert (registro.vehicle_id, registro.sender_relation) == (veiculo, "driver")
+    assert registro.payload_user_matches_sender is False  # o app disse "ana"
+
+
+def test_o_motorista_removido_e_rejeitado_no_envio_seguinte(client, login, fila):
+    """A posse vale no envio: o vínculo desligado corta o motorista na hora."""
+    _, da_gestora = login("ana")
+    joao, do_motorista = login("joao")
+    veiculo = _cadastrar(client, da_gestora)
+    motoristas = _motorista(client, da_gestora, veiculo, "joao")
+    client.delete(f"{motoristas}/{joao['id']}", headers=da_gestora)
+    registro = _registro()
+
+    response = client.post(URL, json={"records": [registro]}, headers=do_motorista)
+
+    assert response.status_code == 202
+    assert response.get_json()["accepted"] == 0
+    assert response.get_json()["rejected"] == [
+        {"index": 0, "id": registro["id"], "vin": MEU, "reason": "vehicle_not_authorized"}
+    ]
+    assert fila.publicados == []
+
+
 def test_fila_fora_responde_503_com_retry_after(client, headers, fila):
     _cadastrar(client, headers)
     fila.falhar = True

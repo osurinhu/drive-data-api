@@ -57,9 +57,10 @@ apaga o banco `<POSTGRES_DB>_mig` pelo próprio container `db`, sem ler o `.env`
 - **pytest em `tests/test_contracts.py`** — quase sempre é um passo de receita esquecido; a
   docstring do teste que falhou diz qual (exceção fora do `ERROR_STATUS`, permissão sem papel,
   rota pública não declarada, operação sem permissão). Corrija a causa, nunca o teste.
-- **pytest em `tests/test_write_cost.py`** — o número de consultas mudou. Não atualize o número
-  sem entender o porquê: ver "Sem `refresh()` depois do `flush()`" em `documentacao/02-decisoes.md`.
-  Para ver os comandos emitidos, use o `/medir-consultas`.
+- **pytest em `tests/test_write_cost.py` ou `tests/test_read_cost.py`** — o número de consultas
+  mudou. Não atualize o número sem entender o porquê: ver, em `documentacao/02-decisoes.md`, "Sem
+  `refresh()` depois do `flush()`" (escrita) e "Relação muitos-para-um na saída vai com
+  `joinedload`" (leitura). Para ver os comandos emitidos, use o `/medir-consultas`.
 
 ## Regra de uso
 

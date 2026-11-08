@@ -207,7 +207,7 @@ def test_o_consumer_sobe_sem_postgres_sem_jwt_e_sem_importar_os_dois():
 @pytest.mark.parametrize(
     ("perfil", "esperadas"),
     [
-        pytest.param("api", "auth,health,item,telemetry,vehicle", id="api"),
+        pytest.param("api", "auth,health,item,telemetry,vehicle,vehicle_driver", id="api"),
         pytest.param("bronze_api", "auth,bronze,health", id="bronze_api"),
     ],
 )

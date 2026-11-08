@@ -125,8 +125,10 @@ confere(
 )
 
 gestora = token(API, "smoke-gestora")
+motorista = token(API, "smoke-motorista")
 silver = token(BRONZE_API, "smoke-silver")
 _, eu = chamar("GET", f"{API}/auth/me", token=gestora)
+_, eu_motorista = chamar("GET", f"{API}/auth/me", token=motorista)
 
 status(404, "o api não serve a leitura do bronze", "GET", f"{API}/bronze/records", token=silver)
 status(
@@ -145,7 +147,17 @@ status(
 
 # --- O fluxo --------------------------------------------------------------------
 
-status(201, "a gestora cadastra o veículo", "POST", f"{API}/vehicle/", {"vin": VIN}, gestora)
+veiculo = status(
+    201, "a gestora cadastra o veículo", "POST", f"{API}/vehicle/", {"vin": VIN}, gestora
+)
+status(
+    201,
+    "a gestora adiciona o motorista",
+    "POST",
+    f"{API}/vehicle/{veiculo.get('id')}/drivers",
+    {"user_name": "smoke-motorista"},
+    gestora,
+)
 aceitos = [registro(VIN) for _ in range(3)]
 lote = {"records": [*aceitos, registro(ALHEIO)]}
 request_id = f"smoke-pipeline-{EXECUCAO}"
@@ -176,19 +188,29 @@ confere(
     itens[:1],
 )
 
-# O app reenvia o mesmo lote, e depois um lote novo de um registro. Com um consumer
-# só, a fila entrega na ordem: quando o registro novo aparece, o reenvio já passou.
+# O app reenvia o mesmo lote, e depois o motorista envia um lote novo de um
+# registro. Com um consumer só, a fila entrega na ordem: quando o registro novo
+# aparece, o reenvio já passou.
 codigo, _ = chamar("POST", f"{API}/telemetry/batches", lote, gestora)
 confere(codigo == 202, f"{codigo}  reenvio do mesmo lote")
 novo = registro(VIN)
-codigo, _ = chamar("POST", f"{API}/telemetry/batches", {"records": [novo]}, gestora)
-confere(codigo == 202, f"{codigo}  lote novo, de um registro")
+codigo, recibo_novo = chamar("POST", f"{API}/telemetry/batches", {"records": [novo]}, motorista)
+confere(
+    codigo == 202 and recibo_novo.get("accepted") == 1,
+    f"{codigo}  lote novo, de um registro, pelo motorista",
+    recibo_novo,
+)
 
 depois, cursor_depois, _, espera = esperar_na_silver(silver, 1, cursor)
 confere(
     [i["record_id"] for i in depois] == [novo["id"]],
     f"do cursor guardado, só o registro novo (em {espera:.0f} s): o reenvio não repetiu nada",
     [i["record_id"] for i in depois],
+)
+confere(
+    [(i["user_id"], i["sender_relation"]) for i in depois] == [(eu_motorista["id"], "driver")],
+    "o registro do motorista chega com o remetente e o vínculo dele",
+    depois[:1],
 )
 vazia, cursor_vazio, _ = ler(silver, cursor_depois)
 confere(

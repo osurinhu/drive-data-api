@@ -1,6 +1,6 @@
 ---
 name: medir-consultas
-description: Mede quantos comandos SQL uma operação emite — rota inteira ou chamada de serviço —, com a fixture sql_log, e compara a mesma listagem com 1 e com 20 registros para detectar N+1. Use antes de otimizar consulta, repositório ou serialização ("medido, não suposto"), ao suspeitar de N+1 ou lentidão, ao aninhar relacionamento num schema de saída, ao acrescentar loader_options, e quando o tests/test_write_cost.py reprovar.
+description: Mede quantos comandos SQL uma operação emite — rota inteira ou chamada de serviço —, com a fixture sql_log, e compara a mesma listagem com 1 e com 20 registros para detectar N+1. Use antes de otimizar consulta, repositório ou serialização ("medido, não suposto"), ao suspeitar de N+1 ou lentidão, ao aninhar relacionamento num schema de saída, ao acrescentar loader_options, e quando o tests/test_write_cost.py ou o tests/test_read_cost.py reprovar.
 argument-hint: "<operação a medir, ex.: GET /item/ com 20 itens>"
 allowed-tools: Bash(bash .claude/skills/verificar/verificar.sh *)
 ---
@@ -101,6 +101,7 @@ Referência medida em 2026-11-06 sobre `Item`:
 | `GET /item/` com 20 itens de 20 donos, listados pelo `gerente`, com um campo de saída lendo `item.owner` (mutação de ensaio) | 23 SELECT | os 3 de sempre + 1 por dono: **N+1** |
 | o mesmo, com 20 itens de um dono só | 3 SELECT | o dono já estava na sessão: o N+1 não aparece |
 | os dois casos acima com `loader_options = (selectinload(Item.owner),)` | 4 SELECT | os 3 + 1 do `selectinload`, constante. Com um dono só, custa 1 a mais |
+| `GET /vehicle/<id>/drivers` com 20 motoristas (3 relações muitos-para-um), medido em 2026-11-08 | 24 sem eager load, 7 com `selectinload`, 4 com `joinedload` | o `selectinload` custa 1 por relação, mesmo com o objeto na sessão; o `joinedload` vem na página. Fixado em `tests/test_read_cost.py` |
 
 - **Toda requisição autenticada custa 1 SELECT em `users`.** É deliberado (02-decisoes, "`current_user`
   custa uma consulta por requisição autenticada"), e acontece uma vez só, mesmo com dois
@@ -108,8 +109,9 @@ Referência medida em 2026-11-06 sobre `Item`:
 - **Ler um campo depois do commit custa 1 SELECT.** O `commit()` expira os atributos
   (`expire_on_commit=True`); por isso o projeto tirou o `refresh()`.
 - **A contagem cresce com o número de registros (ou de donos)?** É N+1. Declare
-  `loader_options = (selectinload(X.rel),)` no repositório (`rules/repositorios.md`) e meça de novo:
-  o esperado é uma consulta a mais, constante.
+  `loader_options` no repositório (`rules/repositorios.md`): `joinedload(X.rel)` numa relação
+  muitos-para-um (o esperado é nenhuma consulta a mais) e `selectinload(X.rel)` numa coleção
+  (uma a mais, constante). Meça de novo.
 
 ## 4. Fechar
 

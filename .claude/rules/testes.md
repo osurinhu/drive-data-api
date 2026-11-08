@@ -62,6 +62,10 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
   contrato.
 - `test_contracts.py` guarda contratos que nenhum teste funcional pegaria. Nunca o afrouxe para
   passar: corrija a causa. Só altere `ROTAS_PUBLICAS` ao abrir uma rota de propósito.
-- `test_write_cost.py` fixa contagens medidas; mudar um número exige medir (`/medir-consultas`) e
-  explicar no cabeçalho. `tests/test_zz_medir.py` é a medição temporária daquela skill: nunca a
-  deixe no commit, e o `/verificar` (tudo) recusa rodar com ela presente.
+- Sub-recurso: também o 404 do pai de outro dono em **cada** operação do filho, um vínculo de
+  outro par (outro pai, outra pessoa) que nenhuma operação alcança, nem a da outra ponta, e o
+  filho que some com o pai excluído (`tests/test_vehicle_driver.py`).
+- `test_write_cost.py` e `test_read_cost.py` fixam contagens medidas; mudar um número exige
+  medir (`/medir-consultas`) e explicar no cabeçalho. `tests/test_zz_medir.py` é a medição
+  temporária daquela skill: nunca a deixe no commit, e o `/verificar` (tudo) recusa rodar com
+  ela presente.

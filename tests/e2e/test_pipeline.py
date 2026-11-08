@@ -96,3 +96,37 @@ def test_a_silver_le_cada_registro_aceito_uma_vez_so(app, client, login, bronze_
     assert bronze_queue() == []
     # Relendo do começo, o bronze tem os mesmos três.
     assert len(_ler_tudo(client, da_silver, limit=1000)[0]) == 3
+
+
+@pytest.mark.usefixtures("sem_janela")
+def test_o_motorista_envia_e_a_silver_ve_o_vinculo(app, client, login, bronze_queue):
+    """A gestora cadastra o veículo e adiciona o motorista; ele envia, e o registro
+    chega à silver com o remetente e o vínculo dele. Removido, o envio seguinte volta
+    como `vehicle_not_authorized` e não chega ao bronze."""
+    _, da_gestora = login("gestora")
+    motorista, do_motorista = login("joao")
+    _, da_silver = login("silver-etl", role=Role.SILVER)
+    veiculo = client.post("/api/v1/vehicle/", json={"vin": MEU}, headers=da_gestora)
+    motoristas = f"/api/v1/vehicle/{veiculo.get_json()['id']}/drivers"
+    adicao = client.post(motoristas, json={"user_name": "joao"}, headers=da_gestora)
+    enviado = _registro(MEU)
+
+    envio = client.post(ENVIO, json={"records": [enviado]}, headers=do_motorista)
+    _consumir(app)
+    [item], cursor, _ = _ler_tudo(client, da_silver, limit=10)
+
+    assert (veiculo.status_code, adicao.status_code, envio.status_code) == (201, 201, 202)
+    assert item["record_id"] == enviado["id"]
+    assert item["user_id"] == motorista["id"]
+    assert item["vehicle_id"] == veiculo.get_json()["id"]
+    assert item["sender_relation"] == "driver"
+    assert item["payload_user_matches_sender"] is False  # o app disse "gestora"
+
+    client.delete(f"{motoristas}/{motorista['id']}", headers=da_gestora)
+    recusado = client.post(ENVIO, json={"records": [_registro(MEU)]}, headers=do_motorista)
+    _consumir(app)
+
+    assert recusado.get_json()["accepted"] == 0
+    assert recusado.get_json()["rejected"][0]["reason"] == "vehicle_not_authorized"
+    assert _ler_tudo(client, da_silver, cursor, limit=10)[0] == []
+    assert bronze_queue() == []

@@ -33,7 +33,7 @@ Uso (a partir da raiz do repositório):
 
 Sobe o código atual num container avulso do `api`, com banco descartável, e
 confere por HTTP: health (com o perfil api: banco e RabbitMQ), OpenAPI, login,
-CRUD de item e de veículo, o envio de lote de telemetria (202 e a mensagem na fila),
+CRUD de item e de veículo, os motoristas, o envio de lote de telemetria (202 e a mensagem na fila),
 a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log
 de acesso.
 
@@ -265,12 +265,28 @@ confere 403 "silver não cadastra" POST /vehicle/ "$token_silver" '{"vin":"9BWZZ
 confere 404 "outro não vê o veículo" GET "/vehicle/$veiculo" "$token_gerente"
 confere 200 "admin altera o veículo" PATCH "/vehicle/$veiculo" "$token_admin" '{"nickname":"smoke"}'
 
-# Telemetria: o lote é aceito em parte (o VIN do gestor vai para a fila; o alheio
-# volta no recibo), a silver não envia, e o formato inválido reprova o lote inteiro.
+# Motoristas: o gestor adiciona pelo login (o gerente, aqui, é só mais um usuário
+# que envia), o motorista não vê os outros motoristas e a silver não mexe em nada.
+motoristas="/vehicle/$veiculo/drivers"
+confere 201 "gestor adiciona motorista" POST "$motoristas" "$token_usuario" \
+  '{"user_name":"smoke-gerente"}'
+motorista="$(campo driver_id)"
+motorista="${motorista:-0}"
+confere 409 "motorista repetido" POST "$motoristas" "$token_usuario" '{"user_name":"smoke-gerente"}'
+confere 404 "login inexistente" POST "$motoristas" "$token_usuario" '{"user_name":"ninguem"}'
+confere 422 "gestor como motorista" POST "$motoristas" "$token_usuario" \
+  '{"user_name":"smoke-usuario"}'
+confere 403 "silver não adiciona" POST "$motoristas" "$token_silver" '{"user_name":"smoke-admin"}'
+confere 404 "motorista não vê os outros" GET "$motoristas" "$token_gerente"
+confere 200 "motorista lista o que dirige" GET /vehicle/driving "$token_gerente"
+
+# Telemetria: o motorista envia um lote aceito em parte (o VIN que ele dirige vai
+# para a fila; o alheio volta no recibo), a silver não envia, o formato inválido
+# reprova o lote inteiro, e o motorista removido não envia mais nada.
 leitura='"collected_at":"2026-11-07T12:00:00Z","readings":[{"metric":"rpm","unit":"rpm","available":true,"value":800.0}]'
 lote="{\"records\":[{\"id\":\"00000000-0000-4000-8000-00000000000a\",\"vin\":\"$vin\",$leitura},"
 lote+="{\"id\":\"00000000-0000-4000-8000-00000000000b\",\"vin\":\"9BWZZZ377VT004251\",$leitura}]}"
-if confere 202 "lote aceito em parte" POST /telemetry/batches "$token_usuario" "$lote"; then
+if confere 202 "motorista envia em parte" POST /telemetry/batches "$token_gerente" "$lote"; then
   total=$((total + 1))
   if [ "$(campo accepted)" = "1" ] && grep -q '"vehicle_not_authorized"' "$tmp/corpo"; then
     echo "OK      recibo: 1 aceito, o VIN alheio em rejected"
@@ -281,8 +297,19 @@ if confere 202 "lote aceito em parte" POST /telemetry/batches "$token_usuario" "
 fi
 confere 403 "silver não envia" POST /telemetry/batches "$token_silver" "$lote"
 confere 422 "lote vazio" POST /telemetry/batches "$token_usuario" '{"records":[]}'
+confere 200 "gestor remove o motorista" DELETE "$motoristas/$motorista" "$token_usuario"
+if confere 202 "motorista removido envia" POST /telemetry/batches "$token_gerente" "$lote"; then
+  total=$((total + 1))
+  if [ "$(campo accepted)" = "0" ]; then
+    echo "OK      recibo: nada aceito do motorista removido"
+  else
+    falhas=$((falhas + 1))
+    echo "FALHOU  recibo do motorista removido: $(head -c 300 "$tmp/corpo")"
+  fi
+fi
 
-# O 202 só sai depois da confirmação do broker: a mensagem já está na fila. A
+# O 202 só sai depois da confirmação do broker: a mensagem já está na fila (uma
+# só: o envio do motorista removido não publicou nada). A
 # contagem que o rabbitmqctl lê de uma fila quorum é atualizada a cada poucos
 # segundos, e por isso a espera.
 total=$((total + 1))

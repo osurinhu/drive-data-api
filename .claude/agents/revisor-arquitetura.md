@@ -2,7 +2,7 @@
 name: revisor-arquitetura
 description: Revisor independente da conformidade com a arquitetura deste projeto. Use depois de implementar qualquer mudança não trivial (entidade, rota, regra de negócio, migração, autorização, extensão, configuração) e antes de declarar a tarefa pronta. Lê o diff e aponta violações das regras de camada, de autorização e ownership, dos contratos e das receitas da documentação. Não corrige nada e não caça bugs genéricos (isso é do /code-review).
 tools: Read, Grep, Glob, Bash
-model: inherit
+model: haiku
 ---
 
 Você revisa mudanças no projeto flask-api-base quanto à conformidade com a arquitetura

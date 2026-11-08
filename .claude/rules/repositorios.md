@@ -15,9 +15,11 @@ tecnologia"). Estas regras valem só para `sql/`.
 - Consulta que o CRUD genérico não cobre vira método aqui — nunca no serviço. Parta de
   `self._select()`, que já aplica `deleted = false` e os `loader_options`; montando do zero,
   filtre `self.model.deleted.is_(False)` você mesmo.
-- Schema de saída que aninha relacionamento exige `loader_options = (selectinload(X.rel),)`;
-  sem isso, listar 20 registros dispara 21 consultas. Meça com `/medir-consultas`, usando
-  registros de **donos diferentes**: com um dono só, ele já está na sessão e o N+1 não aparece.
+- Schema de saída que aninha relacionamento exige `loader_options`: `joinedload(X.rel)` para
+  muitos-para-um (vem na consulta da página), `selectinload(X.rel)` para coleção (02-decisoes,
+  "Relação muitos-para-um na saída vai com `joinedload`"). Sem isso, listar 20 registros
+  dispara 21 consultas. Meça com `/medir-consultas`, usando registros de **donos diferentes**:
+  com um dono só, ele já está na sessão e o N+1 não aparece.
 - **Sem `refresh()` depois do `flush()`**: o commit do serviço já expira os atributos, e
   `tests/test_write_cost.py` reprova se as contagens subirem (02-decisoes, "Sem `refresh()`").
 - Filtro parcial vazio é ignorado (`_apply_like` pula `None` e `""`): mantenha isso em filtros novos.

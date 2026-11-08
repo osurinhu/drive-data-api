@@ -4,7 +4,7 @@
 |---|---|---|
 | [01-arquitetura.md](01-arquitetura.md) | Como o projeto é organizado: camadas, fluxo de uma requisição, e o que cada camada **pode e não pode** fazer | Ao chegar no projeto, antes de escrever a primeira linha |
 | [02-decisoes.md](02-decisoes.md) | Por que cada escolha foi feita, e qual alternativa foi descartada | Antes de mudar algo estrutural — ou quando algo parecer estranho |
-| [03-como-estender.md](03-como-estender.md) | Passo a passo para cada tipo de mudança (entidade, rota, consulta, regra, extensão, campo, comando, configuração, autorização, contrato da fila, bronze) | Toda vez que for implementar algo |
+| [03-como-estender.md](03-como-estender.md) | Passo a passo para cada tipo de mudança (entidade, rota, consulta, regra, extensão, campo, comando, configuração, autorização, contrato da fila, bronze, sub-recurso) | Toda vez que for implementar algo |
 
 O [README da raiz](../README.md) é o runbook: como subir, rodar testes, migrar, configurar.
 Esta pasta é o resto: entender e estender.

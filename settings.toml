@@ -157,6 +157,7 @@ API_V1_ROUTES = [
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
     "blueprint.restapi.v1.vehicle",
+    "blueprint.restapi.v1.vehicle_driver",
     "blueprint.restapi.v1.telemetry",
     "blueprint.restapi.v1.bronze",
 ]
@@ -164,9 +165,10 @@ API_V1_ROUTES = [
 
 # =============================================================================
 # Perfis por processo (FLASK_PROCESS). Cada um declara as próprias listas: a
-# extensão ou a rota que não está na lista do processo não é importada, não exige
-# configuração e não aparece no health dele. (Serviços e repositórios ficam todos
-# declarados no ext/container.py, comum aos processos HTTP.)
+# extensão que não está na lista do processo não é inicializada (não exige
+# configuração, não conecta e não aparece no health dele), e a rota nem é importada.
+# (Serviços, repositórios e adaptadores ficam todos declarados no ext/container.py,
+# comum aos processos HTTP.)
 # =============================================================================
 
 # Producer: cadastro, login, veículos e o recebimento dos lotes do app. Usa o
@@ -188,6 +190,7 @@ API_V1_ROUTES = [
     "blueprint.restapi.v1.auth",
     "blueprint.restapi.v1.item",
     "blueprint.restapi.v1.vehicle",
+    "blueprint.restapi.v1.vehicle_driver",
     "blueprint.restapi.v1.telemetry",
 ]
 # O RabbitMQ fora não tira o processo do balanceador: login e cadastro seguem

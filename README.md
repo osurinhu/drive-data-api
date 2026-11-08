@@ -104,12 +104,21 @@ curl -X POST http://localhost:5000/api/v1/telemetry/batches -H "Authorization: B
   -H 'Content-Type: application/json' -d '{"records":[{"id":"9f1c2a7e-6b4d-4d0e-9a51-2f6f1b0c8e11",
   "vin":"93YBSR7RHEJ298116","collected_at":"2026-11-02T14:03:11.482Z",
   "readings":[{"metric":"rpm","unit":"rpm","available":true,"value":1065.0}]}]}'
+
+# fazer de outra pessoa motorista do veículo, pelo login dela: ela passa a poder enviar
+curl -X POST http://localhost:5000/api/v1/vehicle/<id>/drivers -H "Authorization: Bearer <token>" \
+  -H 'Content-Type: application/json' -d '{"user_name":"joao"}'
+# como o motorista: os veículos que ele dirige, e a saída de um deles
+curl http://localhost:5000/api/v1/vehicle/driving -H "Authorization: Bearer <token do joao>"
+curl -X DELETE http://localhost:5000/api/v1/vehicle/driving/<id> \
+  -H "Authorization: Bearer <token do joao>"
 ```
 
-O lote é aceito em parte: o registro de um veículo de que você não é o gestor volta em
-`rejected`, e os outros seguem para a fila. Com o RabbitMQ fora, a resposta é 503 com
-`Retry-After`, e o lote pode ser reenviado inteiro (cada registro é gravado uma vez só, pelo
-`id`). O `consumer` grava cada registro aceito como um documento da coleção
+O lote é aceito em parte: o registro de um veículo de que você não é o gestor nem motorista
+ativo volta em `rejected`, e os outros seguem para a fila. O gestor remove um motorista com
+`DELETE /api/v1/vehicle/<id>/drivers/<id do usuário>`, e excluir o veículo desliga todos. Com
+o RabbitMQ fora, a resposta é 503 com `Retry-After`, e o lote pode ser reenviado inteiro (cada
+registro é gravado uma vez só, pelo `id`). O `consumer` grava cada registro aceito como um documento da coleção
 `telemetry_records`, no banco `drive_data_bronze`, e só então confirma a mensagem. Para ver:
 
 ```bash

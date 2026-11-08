@@ -371,3 +371,56 @@ que muda uma regra de projeto e por isso é decisão do usuário:
 
     Ficou de fora reaproveitar o `BRONZE_START` como a época do codec do cursor: os valores
     coincidem, mas um é a posição inicial da leitura e o outro, a origem dos milissegundos.
+- **2026-11-08 — Fase 2 do pipeline (os motoristas).** O `VehicleDriver` (modelo e migração
+  0004, com o índice único parcial do vínculo ativo), o repositório, o `VehicleDriverService`, os
+  schemas, a rota `vehicle_driver.py` (a visão do gestor em `/vehicle/<id>/drivers` e a do
+  motorista em `/vehicle/driving`), o `authorized_vins` com os motoristas, o veículo excluído
+  desligando os vínculos e a receita 13 (sub-recurso) da 03.
+  - **Desvios do plano:**
+    - as relações muitos-para-um da saída vão com `joinedload`, e não com `selectinload`: medido
+      com o `/medir-consultas`, a lista de motoristas custa 4 consultas, contra 7 com o
+      `selectinload` e 24 sem eager load (02-decisoes, "Relação muitos-para-um na saída vai com
+      `joinedload`"). As contagens ficam no `tests/test_read_cost.py`, que é novo;
+    - o `DrivingSchema` leva o `owner_name`: o motorista precisa saber de quem é o carro;
+    - o login do motorista passa pelo `_clean_text` antes da busca;
+    - o 404 do login desconhecido conta a quem tem `veiculo:escrever` que aquele login não
+      existe. É o custo aceito (02-decisoes, "Motorista é um vínculo com o veículo, não um
+      papel"): o cadastro público da Fase 3 revelará o mesmo pelo 409;
+    - no `/smoke-api`, o lote de telemetria passa a ser enviado pelo `gerente` como motorista do
+      veículo do `usuario`, e o motorista removido recebe 202 com `accepted == 0`. No
+      `/smoke-pipeline`, um motorista criado pela CLI manda o lote sentinela e a silver confere
+      o `user_id` e o `sender_relation`;
+    - o comentário dos perfis no `settings.toml` dizia que a extensão fora do perfil "não é
+      importada"; corrigido como a revisão do 1.5 pediu para a 01.
+  - **Regras:** a `repositorios.md` ganhou a escolha entre `joinedload` e `selectinload`; a
+    `servicos.md` e a `rotas.md`, o sub-recurso (o lado do gestor pelo pai, a outra ponta pelo
+    id do token); a `testes.md`, a cobertura do sub-recurso e o `test_read_cost.py`. A skill
+    `/medir-consultas` ganhou a medição dos motoristas e a mesma escolha; o `/verificar`, o
+    `test_read_cost.py` no diagnóstico; o `CLAUDE.md`, a receita nova na lista. Valem a partir
+    da sessão seguinte.
+  - **Lições:**
+    - o `selectinload` de uma relação muitos-para-um emite a consulta mesmo quando o objeto já
+      está na sessão (o veículo de todos os vínculos da página): ele custa uma consulta por
+      relação, sempre. O `joinedload` vem na própria consulta da página e, como a relação é
+      muitos-para-um, não multiplica linhas nem atrapalha o `LIMIT`;
+    - a resposta do cliente de teste do Flask não tem `.ok`: use `status_code`.
+  - **Contagens:** `/verificar tudo` com 391 testes; `/smoke-api` com 50 verificações;
+    `/smoke-pipeline` com 21.
+  - **Revisão** (`revisor-arquitetura`, sem bloqueantes). Quatro achados importantes,
+    corrigidos:
+    - o molde `Item` (`item_repository.py`), a docstring do `base_repository.py` e a nota da
+      03 §1.3 ainda davam o `selectinload(X.owner)` como exemplo; agora dão o `joinedload`;
+    - a 01, a `servicos.md` e o passo 3 da receita 13 diziam que **toda** operação do
+      sub-recurso começa pelo pai, e a visão do motorista não começa. Agora dizem "toda operação
+      do gestor", com a outra ponta filtrando pelo id do token; a `rotas.md` passou a dizer que
+      a criação do filho usa o escopo de todos do pai, e não o `current_user.id`;
+    - nenhum teste tinha um vínculo de outro par: tirar o filtro do motorista do
+      `list_driving`, filtrar o `leave` só pelo veículo ou o `remove_driver` só pelo motorista
+      passava na suíte. O `test_nenhuma_operacao_alcanca_o_vinculo_de_outro_par` reprova as
+      três mutações (conferidas uma a uma), e a `testes.md` e a receita 13 pedem esse caso;
+    - faltava esta entrada do registro.
+
+    As três sugestões entraram: a seta "serviço → serviço do pai", com a assimetria que evita o
+    ciclo, nas regras de dependência da 01; o **Descartado** e o **Custo aceito** da decisão do
+    `joinedload` na 02; o `test_read_cost.py` no `/verificar` e na descrição do
+    `/medir-consultas`.

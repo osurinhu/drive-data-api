@@ -29,6 +29,11 @@ Molde: `app/blueprint/restapi/v1/item.py`. Receitas: 03-como-estender §1.8, §2
 - `@error_responses(blp, 403, 404, 409)` (de `blueprint.http_errors`) lista o que **esta** rota produz.
   Nunca 401 (global no spec). 422 só em rota sem `@blp.arguments` que possa levantar
   `BusinessRuleError` (como o `arquivar` da §2); onde há `@blp.arguments`, o smorest já o documenta.
+- Sub-recurso: módulo próprio com o `url_prefix` do pai e outro nome de blueprint, com as
+  permissões e os escopos do pai em toda operação do dono do pai, inclusive a criação do filho
+  (`current_owner_scope(Permission.X_ESCREVER_DE_TODOS)`: o filho nasce num pai que já tem
+  dono). A visão da outra ponta do vínculo (`/vehicle/driving`) passa `current_user.id`
+  (`vehicle_driver.py`; 03-como-estender §13).
 - O payload de `@blp.arguments` vem antes do parâmetro de URL: `def patch(self, payload, x_id)`.
 - A docstring do método é pública: o 1º parágrafo vira o `summary` do OpenAPI e o resto, a
   `description`. Escreva-a em pt-BR para o cliente da API; nota para desenvolvedor vai em `#`.

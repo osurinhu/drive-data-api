@@ -176,6 +176,30 @@ gestores para o mesmo carro, os dois enviando dados dele.
 dele; a disputa é resolvida pelo `admin`, que tem os escopos de veículo de todos. O 409
 revela que o VIN está cadastrado, o que não é segredo: o VIN vem gravado no próprio carro.
 
+### Motorista é um vínculo com o veículo, não um papel
+`vehicle_drivers` liga um usuário a um veículo, com um vínculo ativo por par
+(`uq_vehicle_drivers_vehicle_driver_active`). O gestor (o dono) adiciona o motorista pelo
+login e o remove; o motorista vê os veículos que dirige (`GET /vehicle/driving`) e pode se
+desvincular. A posse do envio (`authorized_vins`) aceita os dois vínculos numa consulta só, e
+o registro leva `sender_relation = driver`.
+**Por quê:** a mesma pessoa é gestora de um carro e motorista de outro, e um papel global não
+diria de qual. As permissões continuam as do veículo (`veiculo:ler`, `veiculo:escrever`): não
+há permissão de motorista.
+**Regras:**
+- o gestor não é motorista do próprio veículo (422): ele já envia como `owner`, e remover o
+  vínculo não tiraria nada;
+- a pessoa não precisa aceitar e pode sair quando quiser;
+- excluir o veículo desliga os vínculos dele na mesma transação
+  (`VehicleService.before_delete`), e o próximo cadastro do mesmo VIN começa sem motoristas;
+- o `admin` gerencia os motoristas de qualquer veículo, pelos escopos de veículo;
+- o que o motorista já enviou fica no bronze depois da remoção: a posse vale no envio.
+
+**Custo aceito:** o 404 "Usuário não encontrado." diz a quem tem conta se um login existe. O
+login não é segredo (é por ele que o gestor acha o motorista), e o cadastro público da Fase 3
+revela o mesmo pelo 409.
+**Descartado:** um papel `motorista`; convite com aceite (a saída pelo próprio motorista
+cobre o vínculo indesejado); adicionar pelo id do usuário (o gestor não sabe o id de ninguém).
+
 ### VIN no formato ISO 3779, sem o dígito verificador
 `domain/vin.py` aceita 17 letras e dígitos sem I, O e Q, em qualquer caixa e com espaços nas
 pontas, e grava a forma canônica (maiúsculas, sem os espaços). O schema recusa o formato
@@ -560,6 +584,19 @@ ao cliente algo sobre o que ele não pode agir.
 origem) — incompatível com um container de DI, que cria fábricas sem contexto de
 requisição.
 
+### O sub-recurso herda a posse do pai pelo serviço do pai
+O `VehicleDriverService` é `owned=False` e recebe o `VehicleService` pelo construtor. Toda
+operação do gestor começa por `vehicles.get_by_id(vehicle_id, owner_scope)` e só depois toca
+no vínculo. As do motorista partem do id dele, que a rota passa explícito (`current_user.id`,
+como na criação): a lista "de quem dirijo" não tem versão de todos.
+**Por quê:** a regra "quem pode mexer no veículo pode mexer nos motoristas dele" fica num
+lugar só, o mesmo que já decide o 404 e o escopo de todos do veículo. O vínculo não tem dono
+próprio: o gestor responde por ele pelo veículo, e o motorista, pela outra ponta.
+**Descartado:** `owned=True` com `owner_field="driver_id"` (o dono do vínculo seria o
+motorista, e as operações do gestor teriam de contornar o filtro); repetir o filtro do dono
+num JOIN do repositório (a mensagem do 404 e o escopo de todos ficariam em dois lugares);
+conferir a posse do veículo na rota (regra de negócio na rota).
+
 ### A sentinela `ANY_OWNER` mora no domínio, em `domain/authz.py`
 `AnyOwner`, `ANY_OWNER` e o tipo `OwnerScope` são vocabulário da autorização, e moram com ele
 na folha `domain/authz.py`. O `ext.auth` os concede (`current_owner_scope`), o `BaseService`
@@ -751,8 +788,30 @@ rota aberta que ninguém declarou pública. São os erros que nenhum teste funci
 porque não quebram nada — só silenciam.
 
 ### Testes de custo em consultas
-`tests/test_write_cost.py` fixa o número de consultas das escritas, com os números medidos
-no próprio arquivo. Regressão de performance deixa de ser invisível.
+`tests/test_write_cost.py` fixa o número de consultas das escritas, e `tests/test_read_cost.py`
+o das listagens que mostram relacionamentos, com os números medidos no próprio arquivo.
+Regressão de performance deixa de ser invisível.
+
+### Relação muitos-para-um na saída vai com `joinedload`
+**Medido, não suposto.** As listas de motoristas mostram três relações muitos-para-um (o
+motorista, o veículo e o gestor dele). Com 20 vínculos de 20 pessoas:
+
+| lista | sem eager load | `selectinload` | `joinedload` |
+|---|---|---|---|
+| `GET /vehicle/<id>/drivers` | 24 | 7 | 4 |
+| `GET /vehicle/driving` | 43 | 6 | 3 |
+
+O `selectinload` resolve o N+1, mas emite uma consulta por relação, mesmo com o objeto já na
+sessão (o veículo que a posse acabou de carregar, o motorista que é o usuário do token). O
+`joinedload` traz as relações na consulta da página; numa relação muitos-para-um ele não
+multiplica linhas, então o `LIMIT` e a contagem continuam certos. Coleção (um-para-muitos)
+continua com `selectinload`, que não multiplica as linhas da página.
+**Descartado:** o `selectinload` também em muitos-para-um (resolve o N+1, mas com uma consulta
+a mais por relação).
+**Custo aceito:** o `loader_options` vale para toda consulta do repositório. O `get_active`
+também faz os JOINs, e a lista do motorista junta o `driver`, que o `DrivingSchema` não mostra.
+Separar as opções por método tiraria o eager load do lugar único em que a base o declara, e o
+próximo método esqueceria.
 
 ### mypy restrito às camadas de lógica pura
 Configurado só em `service`, `repository`, `domain` e `schemas`, onde a tipagem é limpa, e nos

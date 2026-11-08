@@ -1,6 +1,6 @@
 ---
 name: smoke-api
-description: Sobe a API real no Docker com o código atual e a confere por HTTP de ponta a ponta — health, OpenAPI, login JWT, CRUD de item e de veículo, o envio de lote de telemetria (202 e a mensagem na fila), a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log de acesso — num container avulso com banco e vhost do RabbitMQ descartáveis, sem tocar nos dados do banco de desenvolvimento, na fila de desenvolvimento nem no api que já está rodando. Use para ver uma mudança funcionando na aplicação de verdade (não só nos testes); antes de concluir mudança em rota, autenticação, configuração, Dockerfile, entrypoint, dependências ou migração; e quando pedirem para rodar, subir ou testar a API.
+description: Sobe a API real no Docker com o código atual e a confere por HTTP de ponta a ponta — health, OpenAPI, login JWT, CRUD de item e de veículo, os motoristas, o envio de lote de telemetria (202 e a mensagem na fila), a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log de acesso — num container avulso com banco e vhost do RabbitMQ descartáveis, sem tocar nos dados do banco de desenvolvimento, na fila de desenvolvimento nem no api que já está rodando. Use para ver uma mudança funcionando na aplicação de verdade (não só nos testes); antes de concluir mudança em rota, autenticação, configuração, Dockerfile, entrypoint, dependências ou migração; e quando pedirem para rodar, subir ou testar a API.
 allowed-tools: Bash(bash .claude/skills/smoke-api/smoke.sh *)
 ---
 

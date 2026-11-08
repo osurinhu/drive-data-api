@@ -1,6 +1,6 @@
 # Como estender
 
-Doze receitas, da mais comum para a mais rara. Em todas, use `Item` como molde — a
+Treze receitas, da mais comum para a mais rara. Em todas, use `Item` como molde — a
 entidade de exemplo existe para ser copiada (e removida quando você tiver as suas).
 
 | Quero… | Vá para |
@@ -17,6 +17,7 @@ entidade de exemplo existe para ser copiada (e removida quando você tiver as su
 | Restringir uma rota, ou criar permissão/papel | [10](#10-autorização) |
 | Mudar a mensagem que atravessa a fila | [11](#11-contrato-da-fila) |
 | Um metadado novo no documento do bronze, ou um índice | [12](#12-bronze) |
+| Um sub-recurso que herda a posse de outro (os motoristas do veículo) | [13](#13-sub-recurso) |
 
 No fim há um [checklist de revisão](#checklist-de-revisão).
 
@@ -84,7 +85,9 @@ O `[Product]` não é decoração: é o que faz `get_by_id()` ser tipado como
 
 > **Se algum schema de saída aninhar um relacionamento** (`owner = fields.Nested(...)`),
 > declare o eager load aqui, ou listar 20 registros dispara 21 consultas em silêncio:
-> `loader_options = (selectinload(Product.owner),)`
+> `loader_options = (joinedload(Product.owner),)`. O `owner` é muitos-para-um, e o
+> `joinedload` o traz na própria consulta da página; numa coleção (um-para-muitos), use
+> `selectinload` (02-decisoes, "Relação muitos-para-um na saída vai com `joinedload`").
 
 ### 1.4 Serviço — `app/service/product_service.py`
 
@@ -796,6 +799,55 @@ antes com o `explain()`. O índice de uma leitura da silver ganha um teste do pl
 
 ---
 
+## 13. Sub-recurso
+
+Exemplo: os motoristas do veículo (`VehicleDriver`). O sub-recurso não tem dono próprio: quem
+pode mexer nele é quem pode mexer no pai (02-decisoes, "O sub-recurso herda a posse do pai pelo
+serviço do pai"). Molde: os arquivos `vehicle_driver_*`, a rota `vehicle_driver.py` e
+`tests/test_vehicle_driver.py`.
+
+1. **Modelo e migração** (1.1 e 1.2): a FK para o pai, com `ondelete="CASCADE"` e
+   `index=True`, e a unicidade entre os ativos num índice parcial
+   (`uq_vehicle_drivers_vehicle_driver_active`). Os dois lados de cada `relationship`.
+2. **Repositório:** as relações que os schemas de saída mostram entram em `loader_options`:
+   `joinedload` para muitos-para-um, `selectinload` para coleção. A exclusão em massa (os
+   filhos do pai excluído) é um `UPDATE` só, sem commit (`soft_delete_by_vehicle`).
+3. **Serviço:** `owned=False`, com o **serviço do pai** no construtor. Toda operação do dono
+   do pai (as do gestor) começa carregando o pai com o escopo recebido:
+
+   ```python
+   class VehicleDriverService(BaseService[VehicleDriver]):
+       def __init__(self, repository, *, vehicles: VehicleService, users: UserRepository): ...
+
+       def remove_driver(self, vehicle_id: int, driver_id: int, owner_scope: OwnerScope):
+           vehicle = self.vehicles.get_by_id(vehicle_id, owner_scope)  # 404 do pai alheio
+           link = self.repository.get_active(vehicle.id, driver_id)
+           ...
+   ```
+
+   A visão da outra ponta do vínculo (`list_driving`, `leave`) não passa pelo pai: recebe o
+   id do motorista (`driver_id: int`, vindo do token) e filtra por ele, sem versão "de todos".
+   O serviço do pai recebe só o repositório do filho e desliga os filhos no `before_delete`: o
+   `delete` faz o commit das duas escritas juntas.
+4. **Container:** o provider do filho recebe o do pai (`vehicles=vehicle_service`), e o do pai,
+   o repositório do filho (`drivers=vehicle_driver_repository`).
+5. **Schemas:** a saída lê a relação pelo `attribute` (`fields.Str(attribute="driver.name")`).
+   O vínculo que só nasce e termina não tem PATCH; a lista usa o `PaginationQuerySchema` como
+   está.
+6. **Rota:** um módulo próprio, com o `url_prefix` do pai (`/vehicle`) e outro nome de
+   blueprint. As permissões e os escopos são os do pai (`VEICULO_LER` no piso,
+   `VEICULO_ESCREVER` em cada escrita), inclusive na criação do filho, que passa
+   `current_owner_scope(Permission.VEICULO_ESCREVER_DE_TODOS)`: o filho nasce num pai que já
+   tem dono. A visão da outra ponta do vínculo (`/vehicle/driving`, a do motorista) passa
+   `current_user.id`.
+7. **Ativar** como na 1.9 e **testar** como na 1.10, mais: o 404 do pai de outro dono em
+   **cada** operação do filho; um vínculo de outro par (outro pai, outra pessoa) que nenhuma
+   operação alcança; o filho que some quando o pai é excluído; e o custo da listagem,
+   com filhos de pessoas diferentes, em `tests/test_read_cost.py` (medido com o
+   `/medir-consultas`).
+
+---
+
 ## Checklist de revisão
 
 Antes de abrir o PR:
@@ -812,7 +864,8 @@ E confira:
 - [ ] A rota não tem `try/except` nem monta consulta.
 - [ ] O serviço não sabe o que é HTTP (nenhum status, header ou `request`).
 - [ ] O SQL está só no repositório.
-- [ ] Todo método de serviço que depende de posse recebe o escopo de dono explicitamente.
+- [ ] Todo método de serviço que depende de posse recebe o escopo de dono explicitamente. O
+      de um sub-recurso carrega o pai com esse escopo antes de tocar no filho (receita 13).
 - [ ] Rota nova está protegida — ou é pública **de propósito**, marcada com
       `@blp.doc(security=PUBLIC)` **e** acrescentada a `ROTAS_PUBLICAS`, em
       `tests/test_contracts.py`. O teste compara essa lista com o que o spec declara

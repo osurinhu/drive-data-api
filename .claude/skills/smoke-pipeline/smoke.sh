@@ -11,7 +11,7 @@
 #     e só então sobem o api, o bronze-api e o consumer, cada um no seu perfil.
 #   * O roteiro HTTP (fluxo.py) roda dentro do container do api, só com a stdlib, e
 #     alcança o bronze-api pela rede do projeto: nada é publicado no host.
-#   * Os usuários (a gestora e a silver) nascem pelo `flask create-user`, com senha
+#   * Os usuários (a gestora, o motorista e a silver) nascem pelo `flask create-user`, com senha
 #     aleatória que só passa por variável de ambiente.
 #   * O .env é lido pelo compose, como no `docker compose up`, e nunca impresso.
 
@@ -99,6 +99,7 @@ echo ">> no ar em $(($(date +%s) - inicio)) s"
 senha="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
 if ! "${P[@]}" exec -T -e SMOKE_SENHA="$senha" api sh -c '
   flask create-user --name smoke-gestora --password "$SMOKE_SENHA" --role usuario &&
+  flask create-user --name smoke-motorista --password "$SMOKE_SENHA" --role usuario &&
   flask create-user --name smoke-silver --password "$SMOKE_SENHA" --role silver
 ' >"$tmp/usuarios.log" 2>&1; then
   echo "FALHOU  flask create-user:"
@@ -106,7 +107,7 @@ if ! "${P[@]}" exec -T -e SMOKE_SENHA="$senha" api sh -c '
   echo "RESULTADO: FALHOU — flask create-user"
   exit 1
 fi
-echo ">> flask create-user: smoke-gestora (usuario) e smoke-silver (silver)"
+echo ">> flask create-user: smoke-gestora e smoke-motorista (usuario) e smoke-silver (silver)"
 
 echo ">> roteiro (fluxo.py, dentro do container do api)"
 execucao="$(date +%Y%m%d%H%M%S)"

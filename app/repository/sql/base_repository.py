@@ -22,8 +22,9 @@ class BaseRepository[ModelT: BaseModel]:
 
     #: Estratégias de carregamento aplicadas a toda consulta deste repositório.
     #: É aqui que se evita N+1: no dia em que um schema aninhar um
-    #: relacionamento, declare `loader_options = (selectinload(Item.owner),)` e
-    #: o eager load vale para todas as consultas de uma vez.
+    #: relacionamento, declare `loader_options = (joinedload(Item.owner),)` (ou
+    #: `selectinload`, numa coleção) e o eager load vale para todas as consultas
+    #: de uma vez.
     loader_options: tuple = ()
 
     def __init__(self, model: type[ModelT]) -> None:
