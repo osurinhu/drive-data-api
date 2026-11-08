@@ -3,24 +3,57 @@
 O job ``setup`` a aplica (``flask rabbitmq setup``) antes de os processos subirem,
 pela API de gerenciamento e de forma idempotente. O producer e o consumer só a
 usam: nenhum dos dois declara nada, e nenhum depende de o outro ter subido antes.
-O endereço da mensagem (exchange e routing key) é do contrato; aqui ficam a fila
-e o que a liga a ele.
+O endereço da mensagem (exchange e routing key) é do contrato; aqui ficam as filas
+e o que as liga a ele.
 
-A fila é *quorum*: replicada e durável, e o tipo não muda depois de criada. Os
-limites (DLQ, número de entregas, tamanho) vão por policy, que muda sem recriar
-a fila.
+As filas são *quorum*: replicadas e duráveis, e o tipo não muda depois de criadas.
+O comportamento da fila principal (para onde vai a mensagem morta, quantas
+entregas ela aguenta) vem de uma policy, que muda sem recriar a fila.
+
+Mensagem morta é a que o consumer recusou por estar fora do contrato, ou a que
+passou do limite de entregas sem ser gravada. Ela vai para o ``telemetry.dlx`` e
+dele para a DLQ, que não tem consumidor: é fila de ação operacional.
 """
+
+import re
 
 from domain.contracts.telemetry_batch import EXCHANGE, ROUTING_KEY
 from messaging.management import ManagementApi
 
 #: A fila que o consumer drena para o bronze.
 QUEUE = "bronze.telemetry"
+#: Para onde vão as mensagens mortas da fila principal.
+DEAD_LETTER_EXCHANGE = "telemetry.dlx"
+DEAD_LETTER_QUEUE = "bronze.telemetry.dlq"
+#: A policy da fila principal.
+POLICY = "bronze-telemetry"
 
 
-def apply(api: ManagementApi, vhost: str) -> None:
-    """Cria, ou mantém como está, o vhost, o exchange, a fila e o binding."""
+def apply(api: ManagementApi, vhost: str, *, delivery_limit: int) -> None:
+    """Cria, ou mantém como estão, o vhost, os exchanges, as filas e os bindings, e
+    aplica a policy da fila principal."""
     api.ensure_vhost(vhost)
     api.declare_exchange(vhost, EXCHANGE, kind="topic")
+    api.declare_exchange(vhost, DEAD_LETTER_EXCHANGE, kind="topic")
     api.declare_queue(vhost, QUEUE, arguments={"x-queue-type": "quorum"})
+    api.declare_queue(vhost, DEAD_LETTER_QUEUE, arguments={"x-queue-type": "quorum"})
     api.bind(vhost, EXCHANGE, QUEUE, routing_key=ROUTING_KEY)
+    # A mensagem morta mantém a routing key de origem: o "#" recebe todas.
+    api.bind(vhost, DEAD_LETTER_EXCHANGE, DEAD_LETTER_QUEUE, routing_key="#")
+    api.put_policy(
+        vhost,
+        POLICY,
+        pattern=f"^{re.escape(QUEUE)}$",
+        definition={
+            "dead-letter-exchange": DEAD_LETTER_EXCHANGE,
+            # A mensagem só sai da fila depois que a DLQ a confirma. Exige
+            # `reject-publish`: com o `drop-head` padrão, o RabbitMQ volta ao
+            # at-most-once, e a mensagem morta pode se perder no caminho.
+            "dead-letter-strategy": "at-least-once",
+            "overflow": "reject-publish",
+            # Conta só as entregas que falharam (o `reject` do consumer, a queda da
+            # conexão com a mensagem pendente). O `nack` da falha transitória não
+            # conta (RabbitMQ 4.3+).
+            "delivery-limit": delivery_limit,
+        },
+    )

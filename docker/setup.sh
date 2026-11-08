@@ -3,8 +3,8 @@
 #
 # Roda uma vez por `docker compose up` (os processos esperam por ele com
 # `service_completed_successfully`) e é idempotente: rodar de novo não muda o que
-# já está no lugar. Migra o Postgres e aplica a topologia do RabbitMQ; os índices
-# do Mongo (`flask mongo setup`) entram aqui quando existirem.
+# já está no lugar. Migra o Postgres, aplica a topologia do RabbitMQ e cria os
+# índices do bronze no Mongo.
 set -e
 
 cd /srv
@@ -14,5 +14,8 @@ alembic upgrade head
 
 echo "[setup] aplicando a topologia do RabbitMQ..."
 flask rabbitmq setup
+
+echo "[setup] aplicando os índices do bronze..."
+flask mongo setup
 
 echo "[setup] pronto."

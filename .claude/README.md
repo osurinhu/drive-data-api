@@ -17,7 +17,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | Arquivo | Para quê | Carrega quando |
 |---|---|---|
 | `CLAUDE.md` | fontes de verdade, invariantes, armadilhas do ambiente, fluxo | toda sessão |
-| `rules/rotas.md`, `servicos.md`, `servicos-telemetria.md`, `repositorios.md`, `schemas.md`, `dominio.md`, `contratos.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `mensageria.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
+| `rules/rotas.md`, `servicos.md`, `servicos-telemetria.md`, `repositorios.md`, `repositorios-mongo.md`, `schemas.md`, `dominio.md`, `contratos.md`, `modelos-e-migracoes.md`, `autorizacao.md`, `extensoes-e-config.md`, `mensageria.md`, `testes.md` | o que cada camada pode e não pode, com a seção da doc que explica o porquê | ao ler ou editar um arquivo da camada (`paths`) |
 | `rules/infra.md`, `documentacao.md`, `pasta-claude.md` | Docker, CI e dependências; manutenção da doc; manutenção desta pasta | idem |
 | `skills/verificar/` (`SKILL.md` + `verificar.sh`) | `/verificar`: as etapas do CI, no Docker | `/verificar`, ou quando o Claude for testar |
 | `skills/migracao/` | `/migracao`: gerar, revisar e validar migração Alembic | `/migracao`, ou ao mudar modelo |
@@ -25,7 +25,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | `skills/smoke-api/` (`SKILL.md` + `smoke.sh`) | `/smoke-api`: a imagem de produção num container avulso com banco descartável, conferida por HTTP | `/smoke-api`, ou ao pedir para rodar, subir ou testar a API |
 | `skills/medir-consultas/` | `/medir-consultas`: conta o SQL de uma operação e detecta N+1 (modelo de medição + modo `medir` do `verificar.sh`) | `/medir-consultas`, ou antes de otimizar consulta |
 | `agents/revisor-arquitetura.md` | revisão independente do diff, só leitura | ao fim de mudança não trivial |
-| `hooks/estado-docker.sh` | uma linha sobre o estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api` e `bronze-api` | início, retomada, `/clear` e compactação da sessão (hook `SessionStart`) |
+| `hooks/estado-docker.sh` | uma linha sobre o estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api`, `bronze-api` e `consumer` | início, retomada, `/clear` e compactação da sessão (hook `SessionStart`) |
 | `settings.json` | permissões e hooks do projeto (versionado) | toda sessão |
 
 Preferências pessoais vão em `settings.local.json`, que não é versionado.
@@ -254,3 +254,69 @@ que muda uma regra de projeto e por isso é decisão do usuário:
     `__init__.py` sem import conferido em `domain/contracts/` e `service/telemetry/`; a v2 da
     §11.2 cita a porta e o publisher. Ficou de fora o `Retry-After` no OpenAPI: o
     `error_responses` não declara header, e a descrição da rota já o explica.
+- **2026-11-07 — passo 1.4 do pipeline (o consumer gravando no bronze).** O `flask consumer run`
+  (`ext/consumer.py` e `ext/consumer_container.py`), o `messaging/consumer.py`, o
+  `BronzeIngestService`, o `repository/mongo/` e o `flask mongo setup`, o serviço `consumer` no
+  compose e os fechos de import no `test_fronteiras.py`.
+  - **Desvios do plano:**
+    - **a semântica do `nack` e do `reject` está invertida em relação à §5 do plano.** No
+      RabbitMQ 4.3+, a fila quorum não conta o `nack` com requeue para o `delivery-limit`, e
+      conta o `reject` com requeue e a queda da conexão com a mensagem pendente (conferido na
+      documentação e contra o broker, em `tests/rabbitmq/test_consumo.py`). Por isso a falha
+      transitória usa `nack` e o bug usa `reject`. O "fecha o canal quando o Mongo cai" da Fase 5
+      está errado nessa versão: mandaria mensagens boas para a DLQ numa queda longa do Mongo;
+    - DLX, DLQ e policy nasceram aqui (o 1.3 os deixou para o primeiro uso). O
+      `max-length-bytes` continua na Fase 5;
+    - a pausa com backoff (0,5 → 30 s, com `connection.sleep`) e o handler de SIGTERM vieram da
+      Fase 5: sem eles, o critério "consumer parado → a fila acumula; de volta, drena" não se
+      sustenta (o PID 1 ignora o SIGTERM sem handler). A reconexão no processo e o servidor de
+      saúde em :8081 continuam na Fase 5; até lá, a queda do broker encerra o processo com 1 e
+      o `restart: unless-stopped` o sobe de novo;
+    - o `available_metrics` já é calculado (o plano o deixava na Fase 4), porque o documento
+      nasce com o layout final; sem TTL (Fase 7), sem `telemetry_rejections` e sem a distinção
+      duplicado × colisão (Fase 4): duplicado recebe ack e vai para o log;
+    - `AMQP_PREFETCH` e `AMQP_DELIVERY_LIMIT` no `settings.toml`;
+    - o fecho do producer não segue o `ext.container`, raiz de composição dos dois processos
+      HTTP: no 1.5 ele passa a montar o leitor do bronze do `bronze-api`, e seguir o container
+      reprovaria por uma ligação que o perfil `[api]` não carrega. O fecho parte da rota, do
+      serviço e do publisher; o do consumer, de todas as extensões do perfil `[consumer]`.
+  - **Regras:** nasce `rules/repositorios-mongo.md`; a `mensageria.md` ganhou o consumer e a
+    contagem do `delivery-limit`; a `servicos-telemetria.md`, o lado `bronze_*`; a `testes.md`,
+    as fixtures novas e o contexto de aplicação; a `infra.md`, o serviço `consumer`; a
+    `extensoes-e-config.md`, o `ext.mongo` na ressalva e o container do consumer. O `CLAUDE.md`
+    ganhou o invariante 8 e o serviço; o hook, o `consumer`. Valem a partir da sessão seguinte.
+  - **Lições:**
+    - o `Database.command()` do pymongo não herda o `codec_options` do banco: sem passá-lo, o
+      `hello.localTime` volta sem fuso, ao contrário do que o cliente `tz_aware` lê;
+    - o `with_appcontext` da CLI reaproveita o contexto de aplicação que encontra aberto. Uma
+      fixture (`mongo_db`) que deixava o contexto da aplicação mínima do Mongo aberto fez o
+      `flask rabbitmq setup` do e2e rodar contra ela e reprovar com "AMQP_MANAGEMENT_URL não
+      definida". A fixture deixou de abrir contexto; o conftest de `tests/mongo/` o abre;
+    - a DLQ não tem policy: fica com o `delivery-limit` padrão (20) e sem DLX, e a mensagem
+      devolvida 20 vezes com `reject` some. Registrado em 02-decisoes; os comandos da DLQ (Fase
+      5) precisam confirmar ou republicar, nunca devolver;
+    - o critério com os processos reais foi conferido num projeto do compose à parte
+      (`-p ddverif`, um override sem portas no host e `down -v` no fim), para não tocar no
+      ambiente de desenvolvimento de pé. O `docker compose stop consumer` levou de 2 a 7 s, com
+      "Consumer parado." no log. Fica como molde para o `/smoke-pipeline` do passo 1.5;
+    - dentro do `pymongo.timeout`, a espera por um servidor é o prazo da operação, e não o
+      `serverSelectionTimeoutMS` do cliente. E, depois de uma recusa de credencial, o PyMongo
+      marca o servidor como desconhecido: a operação seguinte sai como
+      `ServerSelectionTimeoutError`, não como `OperationFailure`.
+  - **Revisão** (`revisor-arquitetura`; a primeira rodada parou no limite de uso e foi retomada).
+    Um bloqueante, corrigido: a 03 §7 ainda dizia "as duas extensões" importadas por outras, e
+    com o `ext.mongo` são três. Também corrigidos:
+    - o prompt do revisor aceitava só `ext.config` e `ext.database` como exceção;
+    - o motivo de o fecho do producer não seguir o `ext.container` estava errado no registro;
+    - o fecho do consumer partia só de `ext.consumer` e `ext.consumer_container`, e um import
+      escondido no `ext.rabbitmq` ou no `ext.observability` passaria. Agora parte de todas as
+      extensões do perfil `[consumer]`, lidas do `settings.toml`;
+    - o "só compartilham folhas (contrato, portas, VIN)" ficou preciso: o consumer não usa o
+      VIN, e os dois usam o `messaging/connection.py`;
+    - a docstring do `repository/__init__.py` e a trava `idle_timeout` no teste da parada.
+
+    A sugestão de robustez virou código. Antes, credencial ou permissão recusada caía no caminho
+    do bug, e uma senha errada mandaria a fila inteira para a DLQ. Agora é falha transitória,
+    como o Mongo fora. Cada operação também ganhou um prazo (`BRONZE_WRITE_TIMEOUT_SECONDS`):
+    sem ele, um servidor que aceita a conexão e não responde prenderia o consumer até a queda
+    do heartbeat.

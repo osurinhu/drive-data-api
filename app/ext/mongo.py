@@ -11,6 +11,8 @@ Mongo (``flask create-user``) não abrem conexão. Um ``MongoClient`` não atrav
 fork, porque o pool e as threads de monitoramento ficam no processo que o abriu.
 Por isso o processo que não é o que criou o cliente cria o seu (o gunicorn com
 ``--preload``, por exemplo, monta a aplicação antes do fork dos workers).
+
+Também registra o grupo ``flask mongo``, com a operação do bronze (os índices).
 """
 
 import logging
@@ -18,13 +20,16 @@ import os
 import threading
 from typing import Any
 
+import click
 import pymongo
 from flask import Flask, current_app
+from flask.cli import AppGroup
 from pymongo import MongoClient
 from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
 from instrumentation.probes import register_probe
+from repository.mongo import indexes
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +125,26 @@ def _connection() -> MongoConnection:
     return connection
 
 
+mongo_cli = AppGroup("mongo", help="Operação do MongoDB (o bronze).")
+
+
+@mongo_cli.command("setup")
+def setup_command() -> None:
+    """Cria, ou mantém como estão, os índices do bronze (idempotente).
+
+    É o que o job `setup` roda, depois das migrações e da topologia do RabbitMQ.
+    """
+    database = mongo.db
+    try:
+        nomes = indexes.apply(database)
+    except PyMongoError as error:
+        # %.300s: a mensagem do pymongo traz a topologia inteira, mas não a senha.
+        raise click.ClickException(
+            f"o Mongo recusou ou não respondeu ({type(error).__name__}: {str(error):.300})"
+        ) from error
+    click.echo(f"Índices do bronze aplicados no banco '{database.name}': {', '.join(nomes)}.")
+
+
 def init_app(app: Flask) -> None:
     uri = str(app.config.get("MONGO_URI") or "")
     if not uri.startswith(_SCHEMES):
@@ -146,3 +171,4 @@ def init_app(app: Flask) -> None:
         raise RuntimeError(f"MONGO_URI inválida: {error}.") from None
     app.extensions[_EXTENSION_KEY] = connection
     register_probe(app, "mongo", connection.ping)
+    app.cli.add_command(mongo_cli)

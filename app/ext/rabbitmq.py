@@ -24,8 +24,9 @@ rabbitmq_cli = AppGroup("rabbitmq", help="Operação do RabbitMQ.")
 def setup_command() -> None:
     """Aplica a topologia da telemetria no vhost da AMQP_URL (idempotente).
 
-    Cria, ou mantém como estão, o vhost, o exchange, a fila e o binding, pela API
-    de gerenciamento (AMQP_MANAGEMENT_URL). É o que o job `setup` roda.
+    Cria, ou mantém como estão, o vhost, os exchanges, a fila, a DLQ e os bindings,
+    e aplica a policy da fila, pela API de gerenciamento (AMQP_MANAGEMENT_URL). É o
+    que o job `setup` roda.
     """
     management_url = str(current_app.config.get("AMQP_MANAGEMENT_URL") or "")
     if not management_url:
@@ -48,14 +49,17 @@ def setup_command() -> None:
     )
     vhost, user = amqp.virtual_host, amqp.credentials.username
     try:
-        topology.apply(api, vhost)
+        topology.apply(api, vhost, delivery_limit=int(current_app.config["AMQP_DELIVERY_LIMIT"]))
         # Por enquanto o usuário da AMQP_URL recebe tudo no vhost. Os usuários por
         # processo, cada um com o mínimo, chegam com a segurança operacional.
         api.grant(vhost, user, configure=".*", write=".*", read=".*")
     except ManagementApiError as error:
         raise click.ClickException(str(error)) from error
 
-    click.echo(f"Topologia aplicada no vhost '{vhost}' (fila '{topology.QUEUE}').")
+    click.echo(
+        f"Topologia aplicada no vhost '{vhost}' "
+        f"(fila '{topology.QUEUE}', DLQ '{topology.DEAD_LETTER_QUEUE}')."
+    )
 
 
 def init_app(app: Flask) -> None:

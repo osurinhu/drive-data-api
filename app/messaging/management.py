@@ -79,6 +79,21 @@ class ManagementApi:
             {"routing_key": routing_key, "arguments": {}},
         )
 
+    def put_policy(
+        self, vhost: str, name: str, *, pattern: str, definition: dict[str, Any]
+    ) -> None:
+        """Cria ou substitui a policy das filas cujo nome casa com ``pattern``.
+
+        A policy muda o comportamento da fila existente (dead-letter, limites) sem
+        recriá-la, ao contrário dos ``arguments``. O PUT substitui a definição
+        inteira: o que não estiver nela deixa de valer.
+        """
+        self._send(
+            "PUT",
+            f"/api/policies/{_segment(vhost)}/{_segment(name)}",
+            {"pattern": pattern, "definition": definition, "apply-to": "queues", "priority": 0},
+        )
+
     def _send(self, method: str, path: str, body: dict[str, Any]) -> None:
         request = Request(
             self._base + path,

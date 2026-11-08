@@ -5,9 +5,9 @@ name: base-api
 # compose falhar com mensagem clara em vez de subir com segredo vazio.
 #
 # Uma imagem só roda os processos da aplicação; FLASK_PROCESS escolhe o perfil de
-# cada um no settings.toml. Ordem de subida: db e rabbitmq → setup (migra, aplica a
-# topologia e termina) → api e bronze-api. As senhas entram em URLs: use só letras,
-# números, "-" e "_".
+# cada um no settings.toml. Ordem de subida: db, mongo e rabbitmq → setup (migra,
+# aplica a topologia e os índices do bronze e termina) → api, bronze-api e consumer.
+# As senhas entram em URLs: use só letras, números, "-" e "_".
 #
 # RABBITMQ_VHOST (padrão drive-data) é o vhost dos processos, criado pelo setup se
 # faltar. Não precisa estar no .env: existe para o /smoke-api trocá-lo por um vhost
@@ -107,14 +107,17 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
 
   # Job de preparação (docker/setup.sh): migra o banco, aplica a topologia do
-  # RabbitMQ e termina. Os processos só sobem depois que ele termina com sucesso —
-  # com dois processos migrando no boot, os dois disputariam o mesmo banco vazio.
-  # É o único que recebe a credencial da API de gerenciamento do RabbitMQ.
+  # RabbitMQ e os índices do bronze, e termina. Os processos só sobem depois que ele
+  # termina com sucesso — com dois processos migrando no boot, os dois disputariam
+  # o mesmo banco vazio. É o único que recebe a credencial da API de gerenciamento
+  # do RabbitMQ.
   setup:
     <<: *runtime
     restart: "no"
     depends_on:
       db:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -122,6 +125,8 @@ services:
       FLASK_PROCESS: setup
       FLASK_SQLALCHEMY_DATABASE_URI: >-
         postgresql+psycopg://${POSTGRES_USER:-baseapi}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-baseapi}
+      FLASK_MONGO_URI: >-
+        mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
       FLASK_AMQP_URL: >-
         amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
       FLASK_AMQP_MANAGEMENT_URL: >-
@@ -194,6 +199,27 @@ services:
     healthcheck: *healthcheck
     ports:
       - "5001:5000"
+
+  # Consumer: drena a fila para o bronze (`flask consumer run`). Não tem HTTP nem
+  # porta publicada, então escala em réplicas, como consumidores concorrentes da
+  # mesma fila: docker compose up -d --scale consumer=3. Parado, nada se perde: a
+  # fila acumula, o api continua respondendo 202, e ele drena o acúmulo quando volta.
+  consumer:
+    <<: *runtime
+    restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+      mongo:
+        condition: service_healthy
+    environment:
+      FLASK_PROCESS: consumer
+      RUN_MIGRATIONS: "0"
+      FLASK_MONGO_URI: >-
+        mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD}@mongo:27017/?authSource=admin
+      FLASK_AMQP_URL: >-
+        amqp://${RABBITMQ_ADMIN_USER:-admin}:${RABBITMQ_ADMIN_PASSWORD}@rabbitmq:5672/${RABBITMQ_VHOST:-drive-data}
+    command: ["flask", "consumer", "run"]
 
   # Suíte de testes. Sob `profiles`, então NÃO sobe junto com `docker compose up`.
   # Uso: docker compose run --rm test

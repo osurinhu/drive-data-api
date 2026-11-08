@@ -21,7 +21,7 @@ para ler arquivos, use Read, Grep e Glob — nunca `cat`, `head` ou `sed`.
 ## Referências — leia as que a mudança toca
 
 - `.claude/rules/<camada>.md` de cada camada alterada: `rotas`, `servicos`,
-  `servicos-telemetria`, `repositorios`, `schemas`, `dominio`, `contratos`,
+  `servicos-telemetria`, `repositorios`, `repositorios-mongo`, `schemas`, `dominio`, `contratos`,
   `modelos-e-migracoes`, `autorizacao`, `extensoes-e-config`, `mensageria`, `testes`, `infra`,
   `documentacao`.
 - `documentacao/01-arquitetura.md` (camadas e dependências), `documentacao/03-como-estender.md`
@@ -39,7 +39,8 @@ para ler arquivos, use Read, Grep e Glob — nunca `cat`, `head` ou `sed`.
    Docstring de método de rota é pública (1º parágrafo = `summary`, resto = `description` no
    OpenAPI): nota para desenvolvedor ali é Sugestão de mover para comentário.
 2. **Dependências**: a seta nunca aponta para cima; extensão não importa extensão (exceções
-   aceitas: `ext.config` e `ext.database`); as folhas do domínio (tudo em `domain/` menos
+   aceitas: `ext.config`, `ext.database` e `ext.mongo`, que importa de volta só o
+   `repository.mongo.indexes`); as folhas do domínio (tudo em `domain/` menos
    `base.py` e `models.py`) só importam outras folhas, sem o ORM nem infraestrutura, e qualquer
    camada pode usá-las (o `tests/unit/test_fronteiras.py` reprova); vocabulário novo vai para
    `domain/`, nunca solto na raiz de `app/`; `blueprint/http_errors.py` não é folha e é usado por

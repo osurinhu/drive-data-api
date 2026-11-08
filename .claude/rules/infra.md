@@ -15,13 +15,19 @@ paths:
 
 Decisões em 02-decisoes, seções Operação e Qualidade; o runbook é o `README.md`.
 
-- Os serviços que rodam a imagem da aplicação (`setup`, `api`, `bronze-api`) herdam o
+- Os serviços que rodam a imagem da aplicação (`setup`, `api`, `bronze-api`, `consumer`) herdam o
   `x-runtime` do compose, que fixa `target: runtime`: sem ele o Docker constrói o último estágio
   (`dev`) e a aplicação sobe rodando pytest.
 - Quem migra no compose é o job `setup` (`docker/setup.sh`). Processo novo do compose leva
   `<<: *runtime`, `FLASK_PROCESS`, `RUN_MIGRATIONS: "0"` e `depends_on` do `setup` com
   `service_completed_successfully`. O padrão do entrypoint continua `RUN_MIGRATIONS=1`, para o
-  container avulso (o do `/smoke-api`) migrar sozinho.
+  container avulso (o do `/smoke-api`) migrar sozinho. O `setup` também aplica a topologia
+  (`flask rabbitmq setup`) e os índices do bronze (`flask mongo setup`), e espera o broker e o
+  Mongo saudáveis.
+- O `consumer` não tem porta nem healthcheck (a sonda HTTP em :8081 é da Fase 5) e usa
+  `restart: unless-stopped`: quando o broker cai, o processo sai com 1 e o compose o sobe de
+  novo. Ele trata SIGTERM (é o PID 1): o `docker compose stop consumer` termina a mensagem
+  corrente e devolve as outras à fila.
 - RabbitMQ: o `hostname` é fixo porque o nó (`rabbit@<hostname>`) é a chave dos dados no volume.
   O healthcheck roda como `gosu rabbitmq ...`, no compose e no CI. Como root, o CLI cria um
   `.erlang.cookie` do root na primeira subida do volume, e o servidor cai com `eacces`.

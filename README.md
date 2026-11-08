@@ -52,10 +52,12 @@ docker compose up --build
 ```
 
 Isso sobe o PostgreSQL (e cria o banco de testes), o MongoDB e o RabbitMQ. Depois roda o job
-`setup`, que aplica as migrações e a topologia do RabbitMQ (exchange `telemetry` e fila
-`bronze.telemetry`) e termina, e só então inicia os dois processos HTTP: o `api`
-(porta 5000) e o `bronze-api` (porta 5001). O compose falha com mensagem explícita se algum
-segredo do `.env` estiver faltando — nunca sobe com segredo vazio.
+`setup`, que aplica as migrações, a topologia do RabbitMQ (os exchanges `telemetry` e
+`telemetry.dlx`, a fila `bronze.telemetry`, a DLQ `bronze.telemetry.dlq` e a policy que liga
+as duas) e os índices do bronze, e termina. Só então inicia os dois processos HTTP, o `api`
+(porta 5000) e o `bronze-api` (porta 5001), e o `consumer`, que grava no bronze o que chega na
+fila. O compose falha com mensagem explícita se algum segredo do `.env` estiver faltando —
+nunca sobe com segredo vazio.
 
 As senhas entram nas URLs de conexão que o compose monta: use só letras, números, `-` e `_`
 (o `token_urlsafe` já gera assim). As do Postgres, do Mongo e do RabbitMQ valem só na
@@ -83,7 +85,8 @@ requisição seguinte, mesmo com o token já emitido).
 |---|---|---|---|---|
 | `api` | `api` | 5000 | Postgres, RabbitMQ | 503 sem o Postgres; 200 `degraded` sem o RabbitMQ |
 | `bronze-api` | `bronze_api` | 5001 | Postgres, Mongo | 503 sem qualquer um dos dois |
-| `setup` (job) | `setup` | — | Postgres, RabbitMQ (API de gerenciamento) | termina depois de migrar e aplicar a topologia |
+| `consumer` | `consumer` | — | Mongo, RabbitMQ | ainda não tem `/health/`. Sem o Mongo, pausa e as mensagens esperam na fila; sem o RabbitMQ, sai com erro e o compose o reinicia |
+| `setup` (job) | `setup` | — | Postgres, RabbitMQ (API de gerenciamento), Mongo | termina depois de migrar e aplicar a topologia e os índices |
 
 ```bash
 # obter um token
@@ -106,8 +109,20 @@ curl -X POST http://localhost:5000/api/v1/telemetry/batches -H "Authorization: B
 O lote é aceito em parte: o registro de um veículo de que você não é o gestor volta em
 `rejected`, e os outros seguem para a fila. Com o RabbitMQ fora, a resposta é 503 com
 `Retry-After`, e o lote pode ser reenviado inteiro (cada registro é gravado uma vez só, pelo
-`id`). Por enquanto a mensagem fica na fila `bronze.telemetry`, visível no painel: o consumer
-que a grava no bronze é o passo seguinte.
+`id`). O `consumer` grava cada registro aceito como um documento da coleção
+`telemetry_records`, no banco `drive_data_bronze`, e só então confirma a mensagem. Para ver:
+
+```bash
+# os documentos do bronze (a senha do Mongo não sai do container)
+docker compose exec -T mongo sh -c 'mongosh --quiet -u "$MONGO_INITDB_ROOT_USERNAME"   -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin drive_data_bronze   --eval "db.telemetry_records.find().sort({_id: -1}).limit(3)"'
+docker compose logs consumer        # uma linha por lote: novos e repetidos
+```
+
+No painel do RabbitMQ (aba *Queues*), a `bronze.telemetry` drena e a `bronze.telemetry.dlq`
+fica em 0. Uma mensagem na DLQ estava fora do contrato ou falhou mais que
+`AMQP_DELIVERY_LIMIT` vezes, e o log do consumer diz qual. Com o consumer parado
+(`docker compose stop consumer`), o `api` continua respondendo 202 e a fila acumula; quando ele
+volta (`docker compose start consumer`), ela é drenada, sem duplicar nada.
 
 ### Rodando fora do Docker
 
@@ -118,7 +133,9 @@ pip install -r requirements-dev.txt
 # FLASK_AMQP_MANAGEMENT_URL (apontam para localhost) e suba as dependências:
 # docker compose up -d db mongo rabbitmq
 alembic upgrade head                          # o banco, na raiz do repositório
-cd app && flask rabbitmq setup && flask run   # a topologia da fila, depois a API
+cd app && flask rabbitmq setup && flask mongo setup   # a topologia da fila e os índices do bronze
+flask run                                     # a API
+flask consumer run                            # noutro terminal: o consumer (Ctrl+C para parar)
 ```
 
 Sem `FLASK_PROCESS`, vale o perfil `[default]`, que carrega tudo e por isso pede as três URIs.
@@ -132,16 +149,18 @@ Com `FLASK_PROCESS=api` no `.env`, a aplicação sobe como o processo `api` e ne
 app/
   app.py                  create_app(): factory; não conhece nenhuma extensão
   instrumentation/        observação usada por mais de uma extensão (sondas do health, id da requisição)
-  messaging/              RabbitMQ: conexão, sonda, API de gerenciamento, topologia e publisher
+  messaging/              RabbitMQ: conexão, sonda, API de gerenciamento, topologia, publisher e consumer
   ext/                    infraestrutura — cada módulo expõe init_app(app)
   domain/                 modelos ORM e o vocabulário puro (papéis e permissões, VIN, portas, contrato da fila)
-  repository/             acesso a dados, uma subpasta por tecnologia (sql/: o único lugar que monta SQL)
+  repository/             acesso a dados, uma subpasta por tecnologia (sql/: o único lugar que monta SQL;
+                          mongo/: o bronze)
   service/                regra de negócio, validação, ownership; telemetry/: o pipeline, só com portas
   schemas/                contrato de entrada/saída (marshmallow)
   blueprint/              camada HTTP: envelope de erro e, em restapi/v1/, as rotas (uma por recurso)
 migrations/               Alembic
 tests/                    pytest: a raiz usa Postgres; unit/, mongo/, rabbitmq/ e e2e/ (os três), o que o nome diz
-docker/                   entrypoint, setup.sh (o job de preparação) e, por serviço, os scripts de init
+docker/                   entrypoint, setup.sh (o job de preparação: migrações, topologia e índices) e,
+                          por serviço, os scripts de init
 settings.toml             configuração (sem segredos), registro de módulos e um perfil por processo
 requirements.lock.txt     versões exatas do build (versionado)
 documentacao/             arquitetura, decisões e guias de extensão

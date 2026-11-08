@@ -12,8 +12,8 @@ Siga o idioma do arquivo vizinho.
 - `documentacao/02-decisoes.md` — o porquê de cada escolha e o que foi descartado. Antes de
   "simplificar" algo que parece estranho, procure aqui: quase sempre é deliberado.
 - `documentacao/03-como-estender.md` — receitas (entidade, endpoint, consulta, regra, erro, campo,
-  extensão, comando CLI, configuração, autorização, contrato da fila) e o checklist de revisão.
-  Toda implementação.
+  extensão, comando CLI, configuração, autorização, contrato da fila, bronze) e o checklist de
+  revisão. Toda implementação.
 - `README.md` — runbook: subir, testar, migrar, configurar.
 
 Molde real: os arquivos de `Item` (modelo, repositório, serviço, schemas, rota, testes) — os
@@ -33,6 +33,9 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
    (`app/blueprint/http_errors.py`). Rota não tem `try/except`.
 6. O schema é a única fonte da saída: campo fora do schema não aparece na API.
 7. Segredo só via variável `FLASK_*` / `.env`, nunca em arquivo versionado. Nunca exiba o `.env`.
+8. A fila é a única ligação entre producer (`api`) e consumer: do pipeline, os dois só
+   compartilham as folhas do domínio (contrato, portas) e a conexão com o broker. O consumer não alcança o lado HTTP nem o SQL, e o producer
+   não alcança o Mongo (`tests/unit/test_fronteiras.py`). O consumer só dá ack depois de gravar.
 
 ## Ambiente (Windows + Git Bash + Docker)
 
@@ -42,8 +45,9 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
   O `/verificar` já reconstrói.
 - O `api` roda a imagem do último build. Mudou modelo? `docker compose up -d --build --wait api`
   antes de `alembic revision --autogenerate` (ver `/migracao`).
-- Serviços: `db`, `mongo`, `rabbitmq`, o job `setup` (migra e termina), `api` (:5000) e
-  `bronze-api` (:5001). O `test` espera os três primeiros saudáveis.
+- Serviços: `db`, `mongo`, `rabbitmq`, o job `setup` (migra, aplica a topologia e os índices e
+  termina), `api` (:5000), `bronze-api` (:5001) e `consumer` (sem porta: `flask consumer run`).
+  O `test` espera os três primeiros saudáveis.
 - `docker compose exec`/`run` sempre com `-T` (o Bash daqui não tem TTY).
 - O Git Bash reescreve `/srv` como `C:/Program Files/Git/srv`: use `MSYS_NO_PATHCONV=1` em
   comando docker com caminho de container.
@@ -72,7 +76,7 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 - `/medir-consultas <operação>` — conta o SQL emitido e detecta N+1 antes de otimizar.
 - Agente `revisor-arquitetura` — revisão independente do diff.
 - Hook `SessionStart` (`.claude/hooks/estado-docker.sh`) — a sessão começa com uma linha sobre o
-  estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api` e `bronze-api`.
+  estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api`, `bronze-api` e `consumer`.
 
 Mapa da pasta e próximas ondas: `.claude/README.md`. Se uma instrução de `.claude/` se mostrar
 errada ou incompleta, corrija-a na mesma sessão e registre no README.

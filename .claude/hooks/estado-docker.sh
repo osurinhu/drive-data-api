@@ -47,7 +47,7 @@ printf '%s\n' "$estado" | awk -v versao="$versao" '
     if (!($2 in estado) || $1 ~ /-[0-9]+$/) estado[$2] = s
   }
   END {
-    n = split("db mongo rabbitmq api bronze-api", servicos, " ")
+    n = split("db mongo rabbitmq api bronze-api consumer", servicos, " ")
     linha = ""
     for (i = 1; i <= n; i++) {
       s = servicos[i]

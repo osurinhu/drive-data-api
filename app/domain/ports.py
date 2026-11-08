@@ -6,10 +6,12 @@ infraestrutura. Os serviços do pipeline dependem destas interfaces, e os adapta
 Assim a regra se testa com dublês, e o processo que usa a regra não carrega o ORM.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
+from uuid import UUID
 
 from domain.contracts.telemetry_batch import TelemetryBatchV1
 
@@ -55,4 +57,49 @@ class TelemetryPublisher(Protocol):
     def publish(self, batch: TelemetryBatchV1) -> None:
         """Publica o envelope e só volta depois da confirmação do broker. Levanta
         ``PublishFailed`` quando ela não vem."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class BronzeEntry:
+    """Um registro aceito, como o bronze o guarda: o bruto e os metadados da ingestão.
+
+    É o que o serviço do consumer monta; o layout do documento (BSON) é do
+    adaptador, que o traduz.
+    """
+
+    record_id: UUID
+    vin: str
+    vehicle_id: int
+    user_id: int
+    sender_relation: str
+    payload_user_matches_sender: bool
+    collected_at: datetime
+    #: As métricas com leitura disponível no registro, ordenadas e sem repetição.
+    available_metrics: tuple[str, ...]
+    received_at: datetime
+    #: O relógio do servidor do bronze no momento da gravação.
+    ingested_at: datetime
+    message_id: UUID
+    request_id: str | None
+    schema_version: int
+    #: O registro exatamente como o app o enviou.
+    raw: dict[str, Any]
+
+
+class BronzeUnavailable(Exception):
+    """O bronze não respondeu (servidor fora, eleição, rede). É transitório: a mensagem
+    volta para a fila e a gravação se repete, o que é seguro porque ela é idempotente."""
+
+
+class BronzeWriter(Protocol):
+    """O bronze, do lado de quem grava (o consumer)."""
+
+    def server_time(self) -> datetime:
+        """A hora do servidor do bronze, com fuso. Levanta ``BronzeUnavailable``."""
+        ...
+
+    def insert_new(self, entries: Sequence[BronzeEntry]) -> set[UUID]:
+        """Grava os registros que ainda não estão no bronze e devolve os ids dos que já
+        estavam (``record_id``), que ficam como estão. Levanta ``BronzeUnavailable``."""
         ...

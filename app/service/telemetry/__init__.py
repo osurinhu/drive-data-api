@@ -3,6 +3,6 @@
 Sem ``BaseService`` e sem infraestrutura: nada aqui importa ``flask``, ``pika``,
 ``pymongo`` ou ``sqlalchemy``. Os adaptadores chegam pelo construtor (o container
 os escolhe), e cada regra se testa com dublês em memória. O nome do módulo diz o
-lado: ``ingest_*`` é do producer. Este arquivo fica sem import, para que um lado
-não carregue o outro.
+lado: ``ingest_*`` é do producer, ``bronze_*`` é do consumer. Este arquivo fica sem
+import, para que um lado não carregue o outro.
 """

@@ -1,6 +1,6 @@
 # Como estender
 
-Onze receitas, da mais comum para a mais rara. Em todas, use `Item` como molde — a
+Doze receitas, da mais comum para a mais rara. Em todas, use `Item` como molde — a
 entidade de exemplo existe para ser copiada (e removida quando você tiver as suas).
 
 | Quero… | Vá para |
@@ -16,6 +16,7 @@ entidade de exemplo existe para ser copiada (e removida quando você tiver as su
 | Uma chave de configuração | [9](#9-configuração) |
 | Restringir uma rota, ou criar permissão/papel | [10](#10-autorização) |
 | Mudar a mensagem que atravessa a fila | [11](#11-contrato-da-fila) |
+| Um metadado novo no documento do bronze, ou um índice | [12](#12-bronze) |
 
 No fim há um [checklist de revisão](#checklist-de-revisão).
 
@@ -451,7 +452,7 @@ Duas regras:
 - **Nenhuma extensão importa outra extensão.** Se duas precisarem da mesma coisa, essa
   coisa vira um módulo neutro fora de `ext/` — foi exatamente o caso de
   `blueprint/http_errors.py` e de `instrumentation/` — ou, se for vocabulário puro, uma folha
-  do domínio (`app/domain/`). As duas extensões que já são importadas por
+  do domínio (`app/domain/`). As três extensões que já são importadas por
   outras, e por quê, estão nas [regras de dependência](01-arquitetura.md#regras-de-dependência).
 
 A ordem da lista é a ordem de inicialização. `ext.observability` fica primeiro (para que o
@@ -521,8 +522,8 @@ Uso: `docker compose exec api flask recalcular-totais`
 
 **Comando de operação de uma infraestrutura** (aplicar a topologia do RabbitMQ, criar os índices
 do Mongo) não vai em `ext/commands.py`: fica na extensão dona daquela infraestrutura, num
-`AppGroup` com o nome do módulo, registrado no `init_app` dela. O molde é o
-`flask rabbitmq setup` de `ext/rabbitmq.py`:
+`AppGroup` com o nome do módulo, registrado no `init_app` dela. Os moldes são o
+`flask rabbitmq setup` de `ext/rabbitmq.py` e o `flask mongo setup` de `ext/mongo.py`:
 
 ```python
 rabbitmq_cli = AppGroup("rabbitmq", help="Operação do RabbitMQ.")
@@ -541,7 +542,13 @@ def init_app(app: Flask) -> None:
 O motivo é o perfil. O job `setup` carrega só o que usa (`[setup]`), e o `ext.commands` traz o
 banco e o container junto. Na extensão, o comando chega a todo processo que conhece aquela
 infraestrutura, e a nenhum outro. A credencial de operação (`AMQP_MANAGEMENT_URL`) é lida só
-dentro do comando: o processo que nunca o roda não precisa dela.
+dentro do comando: o processo que nunca o roda não precisa dela. Erro da infraestrutura vira
+`click.ClickException` com a mensagem, sem o traceback.
+
+**Processo de longa duração** (o `flask consumer run`) segue o mesmo formato, numa extensão só
+dele (`ext/consumer.py`), que só o perfil daquele processo carrega. O comando pega o objeto
+pronto no container do processo e instala o handler de SIGTERM: no container, ele é o PID 1
+(02-decisoes, "Parada e queda").
 
 ---
 
@@ -741,6 +748,45 @@ sem quebrar), acrescente-o a `SENDER_RELATIONS`; senão, é a v2.
 
 ---
 
+## 12. Bronze
+
+O bronze é a coleção `telemetry_records` do Mongo, que o consumer grava: um documento por
+registro, com `_id` igual ao `id` do registro, o bruto em `raw` e os metadados da ingestão em
+`ingestion` (02-decisoes, "A gravação no bronze é idempotente pelo `_id`"). O serviço monta um
+`BronzeEntry` e não conhece o BSON. Só o `repository/mongo/bronze_document.py` conhece o
+layout do documento.
+
+### 12.1 Metadado novo no documento
+
+1. O campo em `BronzeEntry` (`app/domain/ports.py`), com o tipo do domínio (`UUID`, `datetime`
+   com fuso).
+2. O valor em `bronze_entry` (`app/service/telemetry/bronze_rules.py`). Ele vem do envelope, do
+   registro ou de uma regra pura do mesmo módulo, como `available_metrics`. Se vem da mensagem,
+   o contrato precisa trazê-lo antes (receita 11.1).
+3. A chave em `to_document` (`app/repository/mongo/bronze_document.py`), dentro de `ingestion`.
+   Id vai como texto, e data como `datetime` (o BSON guarda milissegundos).
+4. Os testes: a regra em `tests/unit/test_gravacao_bronze.py`, e o layout em
+   `test_grava_um_documento_por_registro_no_layout_do_bronze` (`tests/mongo/`).
+
+O bronze não é reescrito: os documentos já gravados ficam sem o campo, e quem os lê trata a
+ausência.
+
+### 12.2 Índice novo
+
+1. Uma constante com o nome (`ix_<campos>`) e o `create_index` em `apply`
+   (`app/repository/mongo/indexes.py`), com o nome na lista que ela devolve.
+2. A definição no `test_os_indices_do_bronze_se_aplicam_de_novo_sem_mudar_nada`
+   (`tests/mongo/`): o teste já confere que todo nome devolvido existe, mas só confere a chave
+   do índice que tem a asserção.
+3. Aplicar: o job `setup` roda o `flask mongo setup` a cada `docker compose up`.
+
+O `create_index` é idempotente, mas mudar a definição de um índice que já existe reprova a
+aplicação: o Mongo recusa outro índice com o mesmo nome. Crie o novo com outro nome e apague o
+antigo numa mudança à parte. Índice que a consulta não usa é custo em toda gravação: meça
+antes com o `explain()`.
+
+---
+
 ## Checklist de revisão
 
 Antes de abrir o PR:
@@ -776,6 +822,11 @@ E confira:
       canônico; qualquer outra mudança é a v2 (receita 11).
 - [ ] O pipeline (`service/telemetry/`) só recebe adaptadores pelo construtor e não importa
       infraestrutura (`tests/unit/test_fronteiras.py` reprova).
+- [ ] Producer e consumer só se ligam pela fila: nenhum módulo do consumer alcança o lado HTTP
+      ou o SQL, e nenhum do producer alcança o Mongo (`tests/unit/test_fronteiras.py` reprova).
+- [ ] O consumer só confirma a mensagem (`basic_ack`) depois da gravação confirmada. Falha
+      transitória volta com `nack`, bug com `reject` com requeue, e só a mensagem fora do
+      contrato vai direto para a DLQ (02-decisoes, "O destino de cada mensagem").
 - [ ] Teste cobrindo acesso de outro usuário (deve ser **404**) e, se a rota exige uma
       permissão que algum papel não tem, acesso sem ela em cada operação (deve ser **403** —
       `login(role=Role.LEITOR)` na criação; nas escritas sobre registro existente, rebaixe o

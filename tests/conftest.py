@@ -16,7 +16,11 @@ uma pasta ficam aqui, sem autouse, para que nenhum teste pague por
 infraestrutura que não usa.
 """
 
+import contextlib
 import os
+import time
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pika
 import pytest
@@ -59,10 +63,16 @@ os.environ.setdefault("FLASK_SECRET_KEY", "chave-de-teste-sem-nenhum-valor-real-
 os.environ.setdefault("FLASK_JWT_SECRET_KEY", "chave-jwt-de-teste-sem-valor-real-0002")
 
 from app import create_app  # noqa: E402
+from domain.contracts.telemetry_batch import (  # noqa: E402
+    EXCHANGE,
+    ROUTING_KEY,
+    Sender,
+    TelemetryBatchV1,
+    TelemetryRecordV1,
+)
 from domain.ports import PublishFailed  # noqa: E402
 from ext import mongo as ext_mongo  # noqa: E402
 from ext.database import db  # noqa: E402
-from ext.mongo import mongo  # noqa: E402
 from messaging import topology  # noqa: E402
 from messaging.connection import connection_parameters  # noqa: E402
 from messaging.management import ManagementApi  # noqa: E402
@@ -195,11 +205,27 @@ def _app_do_mongo():
 
 @pytest.fixture
 def mongo_db(_app_do_mongo):
-    """O banco de testes do Mongo (``<MONGO_DATABASE>_test``), com o contexto de
-    aplicação aberto durante o teste, como os adaptadores de ``repository/mongo``
-    exigem."""
-    with _app_do_mongo.app_context():
-        yield mongo.db
+    """O banco de testes do Mongo (``<MONGO_DATABASE>_test``), para ler e preparar.
+
+    Não abre contexto de aplicação: aberto durante o teste inteiro, ele viraria o
+    ``current_app`` de tudo, inclusive dos comandos da CLI (o ``with_appcontext``
+    reaproveita o contexto que encontra). Quem usa os adaptadores de
+    ``repository/mongo`` abre o contexto (``tests/mongo/`` o abre para todos).
+    """
+    connection: ext_mongo.MongoConnection = _app_do_mongo.extensions["mongo"]
+    return connection.database
+
+
+@pytest.fixture
+def bronze_limpo(mongo_db):
+    """O banco de testes do Mongo, com as coleções (e os índices delas) apagadas no
+    fim do teste. Autouse em ``tests/mongo/`` e ``tests/e2e/``."""
+    yield mongo_db
+    # A trava é o sufixo: a suíte apaga coleções, e o banco de desenvolvimento
+    # nunca pode ser o alvo, nem por engano de configuração.
+    assert mongo_db.name.endswith("_test"), mongo_db.name
+    for colecao in mongo_db.list_collection_names():
+        mongo_db.drop_collection(colecao)
 
 
 @pytest.fixture(scope="session")
@@ -238,38 +264,133 @@ def amqp_vhost(amqp_url, amqp_management):
 
 
 @pytest.fixture(scope="session")
-def amqp_topology(amqp_vhost, amqp_management):
+def delivery_limit():
+    """O ``AMQP_DELIVERY_LIMIT`` do settings.toml, o que a policy de teste aplica."""
+    return int(_config["AMQP_DELIVERY_LIMIT"])
+
+
+@pytest.fixture(scope="session")
+def amqp_topology(amqp_vhost, amqp_management, delivery_limit):
     """A topologia da telemetria aplicada no vhost de testes, pelo mesmo
     ``topology.apply`` que o ``flask rabbitmq setup`` usa. Devolve o vhost."""
-    topology.apply(amqp_management, amqp_vhost)
+    topology.apply(amqp_management, amqp_vhost, delivery_limit=delivery_limit)
     return amqp_vhost
+
+
+def _conectar(amqp_url: str, vhost: str) -> pika.BlockingConnection:
+    parametros = connection_parameters(amqp_url, timeout=5, heartbeat=60, connection_name="pytest")
+    assert parametros.virtual_host == vhost, "a fila lida não é a da topologia aplicada"
+    return pika.BlockingConnection(parametros)
+
+
+@contextlib.contextmanager
+def _fila_de_teste(amqp_url: str, vhost: str, fila: str):
+    """A fila vazia no começo e no fim do teste, e a função que a esvazia, devolvendo
+    as mensagens como pares ``(propriedades, corpo)``.
+
+    ``drenar(minimo)`` espera até chegarem ``minimo`` mensagens, por até 5 s: o
+    dead-letter é assíncrono, e a mensagem morta chega à DLQ um instante depois da
+    recusa.
+    """
+    connection = _conectar(amqp_url, vhost)
+    channel = connection.channel()
+    channel.queue_purge(fila)
+
+    def _drenar(minimo: int = 0) -> list[tuple[pika.BasicProperties, bytes]]:
+        mensagens: list[tuple[pika.BasicProperties, bytes]] = []
+        prazo = time.monotonic() + 5
+        while True:
+            method, properties, body = channel.basic_get(fila, auto_ack=True)
+            if method is not None:
+                mensagens.append((properties, body))
+            elif len(mensagens) >= minimo or time.monotonic() >= prazo:
+                return mensagens
+            else:
+                connection.sleep(0.1)
+
+    try:
+        yield _drenar
+    finally:
+        channel.queue_purge(fila)
+        connection.close()
 
 
 @pytest.fixture
 def bronze_queue(amqp_url, amqp_topology):
-    """A fila do bronze no vhost de testes, vazia no começo do teste.
+    """A fila do bronze no vhost de testes, vazia no começo do teste. Devolve a
+    função que a esvazia (ver ``_fila_de_teste``)."""
+    with _fila_de_teste(amqp_url, amqp_topology, topology.QUEUE) as drenar:
+        yield drenar
 
-    Devolve uma função que tira da fila e devolve as mensagens que estão nela,
-    como pares ``(propriedades, corpo)``.
+
+@pytest.fixture
+def dead_letters(amqp_url, amqp_topology):
+    """A DLQ no vhost de testes, vazia no começo do teste. Devolve a função que a
+    esvazia (ver ``_fila_de_teste``)."""
+    with _fila_de_teste(amqp_url, amqp_topology, topology.DEAD_LETTER_QUEUE) as drenar:
+        yield drenar
+
+
+@pytest.fixture
+def publicar(amqp_url, amqp_topology):
+    """Publica um corpo qualquer no endereço do contrato, com confirmação.
+
+    Serve para a mensagem que o producer nunca mandaria (fora do contrato) e para o
+    envelope válido (``encode(lote)``), sem passar pelo publisher.
     """
-    parametros = connection_parameters(amqp_url, timeout=5, heartbeat=60, connection_name="pytest")
-    assert parametros.virtual_host == amqp_topology, "a fila lida não é a da topologia aplicada"
-    connection = pika.BlockingConnection(parametros)
+    connection = _conectar(amqp_url, amqp_topology)
     channel = connection.channel()
-    channel.queue_purge(topology.QUEUE)
+    channel.confirm_delivery()
 
-    def _drain() -> list[tuple[pika.BasicProperties, bytes]]:
-        mensagens = []
-        while True:
-            method, properties, body = channel.basic_get(topology.QUEUE, auto_ack=True)
-            if method is None:
-                return mensagens
-            mensagens.append((properties, body))
+    def _publicar(corpo: bytes, *, message_id: str = "mensagem-do-teste") -> None:
+        channel.basic_publish(
+            exchange=EXCHANGE,
+            routing_key=ROUTING_KEY,
+            body=corpo,
+            properties=pika.BasicProperties(message_id=message_id, delivery_mode=2),
+            mandatory=True,
+        )
 
-    yield _drain
-
-    channel.queue_purge(topology.QUEUE)
+    yield _publicar
     connection.close()
+
+
+@pytest.fixture
+def novo_lote():
+    """Fábrica de envelopes válidos do contrato: ``novo_lote(registros=3)``.
+
+    O bruto de cada registro tem o ``id`` dele e uma leitura de ``rpm``
+    disponível. As datas têm milissegundos, a precisão da data BSON.
+    """
+
+    def _novo(registros: int = 1, *, sender_id: int = 51) -> TelemetryBatchV1:
+        agora = datetime.now(UTC).replace(microsecond=123000)
+        ids = [uuid4() for _ in range(registros)]
+        return TelemetryBatchV1(
+            message_id=uuid4(),
+            received_at=agora,
+            request_id="req-do-teste",
+            sender=Sender(user_id=sender_id),
+            records=tuple(
+                TelemetryRecordV1(
+                    record_id=record_id,
+                    vin="93YBSR7RHEJ298116",
+                    vehicle_id=7,
+                    sender_relation="owner",
+                    collected_at=agora,
+                    payload_user_matches_sender=True,
+                    raw={
+                        "id": str(record_id),
+                        "readings": [
+                            {"metric": "rpm", "unit": "rpm", "available": True, "value": 800.0}
+                        ],
+                    },
+                )
+                for record_id in ids
+            ),
+        )
+
+    return _novo
 
 
 class FilaEmMemoria:

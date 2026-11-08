@@ -24,8 +24,8 @@ PERFIS = ("api", "bronze_api", "consumer", "setup")
 
 #: A fronteira de cada processo: as extensões que ele nunca carrega.
 FORA_DO_PERFIL = {
-    "api": {"ext.mongo"},
-    "bronze_api": {"ext.rabbitmq"},
+    "api": {"ext.mongo", "ext.consumer_container", "ext.consumer"},
+    "bronze_api": {"ext.rabbitmq", "ext.consumer_container", "ext.consumer"},
     "consumer": {
         "ext.database",
         "ext.container",
@@ -35,7 +35,15 @@ FORA_DO_PERFIL = {
         "ext.commands",
         "ext.api",
     },
-    "setup": {"ext.container", "ext.auth", "ext.cors", "ext.error_handler", "ext.api"},
+    "setup": {
+        "ext.container",
+        "ext.consumer_container",
+        "ext.auth",
+        "ext.cors",
+        "ext.error_handler",
+        "ext.consumer",
+        "ext.api",
+    },
 }
 
 #: A extensão que registra cada sonda do health.
@@ -159,9 +167,20 @@ def _montar_num_processo_a_parte(perfil: str, imprime: str, **variaveis: str) ->
 
 def test_o_consumer_sobe_sem_postgres_sem_jwt_e_sem_importar_os_dois():
     """O consumer monta a aplicação sem URI do banco e sem chave JWT, e nem
-    importa as bibliotecas deles nem a camada HTTP (``blueprint``). Num processo
-    à parte: na suíte, o SQLAlchemy já está carregado."""
-    proibidos = {"sqlalchemy", "flask_sqlalchemy", "flask_jwt_extended", "psycopg", "blueprint"}
+    importa as bibliotecas deles, a camada HTTP (``blueprint``), o ORM ou o lado do
+    producer. Num processo à parte: na suíte, o SQLAlchemy já está carregado. (O
+    ``test_fronteiras.py`` confere o mesmo pelo código-fonte, módulo a módulo.)"""
+    proibidos = {
+        "sqlalchemy",
+        "flask_sqlalchemy",
+        "flask_jwt_extended",
+        "psycopg",
+        "blueprint",
+        "domain.models",
+        "repository.sql",
+        "messaging.publisher",
+        "service.telemetry.ingest_service",
+    }
 
     importados = _montar_num_processo_a_parte(
         "consumer",

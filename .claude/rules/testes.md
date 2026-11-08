@@ -20,19 +20,26 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
 - Fixtures (`tests/conftest.py`): `client`; `login(name, password, role)` → `(user_dict, headers)`;
   `headers` (usuário comum já autenticado); `make_user(...)` → dict; `set_role(nome, papel)` troca o
   papel sem reemitir o token; `sql_log` (lista do SQL emitido — chame `.clear()` depois do preparo);
-  `mongo_db` (o banco `<MONGO_DATABASE>_test`); `amqp_url`, `amqp_management_url`,
-  `amqp_management` e `amqp_vhost` (o vhost `drive-data-test`, criado pela API de gerenciamento);
-  `amqp_topology` (a topologia aplicada nele por `topology.apply`); `bronze_queue` (a fila vazia
-  no começo; chamada, devolve e tira as mensagens como `(propriedades, corpo)`);
-  `fila_em_memoria` (o dublê `FilaEmMemoria` do `TelemetryPublisher`, com `publicados` e
-  `falhar`).
+  `mongo_db` (o banco `<MONGO_DATABASE>_test`, para ler e preparar; não abre contexto de
+  aplicação); `bronze_limpo` (apaga as coleções no fim; autouse em `tests/mongo/` e
+  `tests/e2e/`); `amqp_url`, `amqp_management_url`, `amqp_management` e `amqp_vhost` (o vhost
+  `drive-data-test`, criado pela API de gerenciamento); `delivery_limit`; `amqp_topology` (a
+  topologia aplicada nele por `topology.apply`); `bronze_queue` e `dead_letters` (a fila e a
+  DLQ vazias no começo e no fim; chamadas, devolvem e tiram as mensagens como
+  `(propriedades, corpo)`); `publicar(corpo)` (publica no exchange da telemetria, com
+  confirmação); `novo_lote(registros)` (um `TelemetryBatchV1` válido); `fila_em_memoria` (o
+  dublê `FilaEmMemoria` do `TelemetryPublisher`, com `publicados` e `falhar`).
 - A rota usa o dublê por `app.container.<provider>.override(providers.Object(dublê))`, com
   `reset_override()` na saída (fixture `fila` de `tests/test_telemetry.py`). O adaptador contra
   o broker de verdade fica para `tests/rabbitmq/` e `tests/e2e/`; na raiz, só apontado para uma
   porta fechada (o 503 com o broker fora). Dado de teste fixo (o exemplo canônico do
   contrato) mora em `tests/data/`.
-- As tabelas são esvaziadas após cada teste, e em `tests/mongo/` também as coleções: a ordem não
-  importa, mas não presuma ids.
+- As tabelas são esvaziadas após cada teste, e em `tests/mongo/` e `tests/e2e/` também as
+  coleções: a ordem não importa, mas não presuma ids.
+- Fixture nunca deixa um contexto de aplicação aberto que o teste não pediu: o `with_appcontext`
+  da CLI reaproveita o contexto que encontra, e o comando rodaria contra a aplicação errada. O
+  contexto que os adaptadores de `repository/mongo/` exigem é aberto pelo conftest de
+  `tests/mongo/`, só ali. No e2e, quem usa o adaptador abre `with app.app_context()`.
 - O banco de testes nasce de `create_all()`, não das migrações: teste verde não prova que a
   migração existe. Por isso o `/verificar` também roda o `alembic check`.
 - Nome do teste em pt-BR descrevendo o comportamento

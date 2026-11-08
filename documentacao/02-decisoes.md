@@ -306,21 +306,126 @@ validar o VIN no decoder, que é trabalho do serviço do consumer.
 adaptadores é o container. As regras puras (a partição, o indicador do `user`) ficam em
 `ingest_rules.py`, sem estado. Nada ali importa `flask`, `pika`, `pymongo`, `sqlalchemy` ou um
 adaptador.
-**Por quê:** cada regra se testa com dublês em memória (`tests/unit/test_ingestao.py`), e o
-consumer vai importar o lado dele sem carregar o do producer.
+O lado do consumer segue o mesmo molde: o `BronzeIngestService` recebe o bronze
+(`BronzeWriter`) pelo construtor, e a montagem do documento de cada registro fica em
+`bronze_rules.py`.
+**Por quê:** cada regra se testa com dublês em memória (`tests/unit/test_ingestao.py`,
+`tests/unit/test_gravacao_bronze.py`), e o consumer importa o lado dele sem carregar o do
+producer.
 **Rede de segurança:** `tests/unit/test_fronteiras.py` confere os imports do pacote por lista
 de permitidos.
 
 ### A topologia é aplicada pelo job `setup`, nunca pelos processos
-Exchange, fila e binding são declarados num lugar só (`messaging/topology.py`) e aplicados pelo
-`flask rabbitmq setup`, pela API de gerenciamento, de forma idempotente. O producer e o
-consumer só usam a topologia: nenhum dos dois declara nada, e nenhum depende de o outro ter
-subido antes. Só o `setup` recebe a credencial de operação (`AMQP_MANAGEMENT_URL`).
-A fila é *quorum*, replicada e durável. O tipo não muda depois da criação. Os limites (DLQ,
-número de entregas, tamanho) vão por policy, que muda sem recriar a fila.
+Os exchanges (`telemetry` e `telemetry.dlx`), as filas (`bronze.telemetry` e a DLQ
+`bronze.telemetry.dlq`), os bindings e a policy são declarados num lugar só
+(`messaging/topology.py`) e aplicados pelo `flask rabbitmq setup`, pela API de gerenciamento,
+de forma idempotente. O producer e o consumer só usam a topologia: nenhum dos dois declara
+nada, e nenhum depende de o outro ter subido antes. Só o `setup` recebe a credencial de
+operação (`AMQP_MANAGEMENT_URL`).
+As filas são *quorum*, replicadas e duráveis. O tipo não muda depois da criação. O
+comportamento da fila principal vai pela policy `bronze-telemetry`, que muda sem recriar a
+fila: a mensagem morta segue para o `telemetry.dlx` (`dead-letter-exchange`), com
+`dead-letter-strategy: at-least-once` (ela só sai da fila depois que a DLQ a confirma), o
+`overflow: reject-publish` que essa estratégia exige (com o `drop-head` padrão, o RabbitMQ
+volta ao *at-most-once*) e o `delivery-limit` de `AMQP_DELIVERY_LIMIT`. O teto de tamanho
+(`max-length-bytes`, a contrapressão que vira 503 no producer) entra na Fase 5.
 **Descartado:** cada processo declarar o que usa na subida (cada um precisaria de permissão
 de configurar o broker, e os argumentos se espalhariam por dois lugares); fila clássica (sem
-limite de entregas nem replicação).
+limite de entregas nem replicação); os limites em `x-arguments`, que não mudam sem recriar a
+fila.
+**Custo aceito:** a própria DLQ fica sem policy: tem o `delivery-limit` padrão do quorum (20) e
+nenhum DLX. Quem a lê e devolve a mensagem com `reject`, ou cai com ela pendente, a faz contar,
+e passadas 20 vezes ela é descartada. Os comandos de operação da DLQ (Fase 5) confirmam ou
+republicam, nunca devolvem.
+
+### O consumer é um comando da CLI, com um container de DI próprio
+O processo consumer é o `flask consumer run` (`ext/consumer.py`), no perfil `[consumer]`, com
+as extensões `ext.observability`, `ext.mongo`, `ext.rabbitmq`, `ext.consumer_container` e
+`ext.consumer`. O grafo de objetos vem do `ext/consumer_container.py`
+(`app.consumer_container`): o consumidor da fila, o `BronzeIngestService` e o
+`MongoBronzeWriter`.
+**Por que comando da CLI:** reaproveita a configuração por perfil, os logs e o carregamento
+por `EXTENSIONS`, como os processos HTTP (receita 8).
+**Por que outro container:** o `ext/container.py` importa o lado HTTP inteiro (o SQL, o
+publisher, os serviços de cadastro). Com ele, o consumer carregaria o SQLAlchemy e o JWT.
+**Rede de segurança:** o `test_composicao.py` monta o processo e confere o que ele importa; o
+`test_fronteiras.py` confere o fecho de imports lendo o código.
+**Descartado:** um script avulso com uma segunda raiz de composição; um container só, o padrão
+da base.
+
+### A gravação no bronze é idempotente pelo `_id`
+Cada registro vira um documento de `telemetry_records` cujo `_id` é o `id` do registro (em
+texto). O `MongoBronzeWriter` grava o lote com `insert_many(ordered=False)`: o Mongo grava
+todos os que pode, e os recusados por chave duplicada (código 11000) voltam como "já estavam
+lá". Duplicado é sucesso: a mensagem recebe ack, e o serviço registra a contagem no log.
+Reentrega da fila ou reenvio do app gravam só o que faltava.
+O documento guarda o registro como chegou (`raw`) e os metadados em `ingestion`: o veredito do
+producer (`vehicle_id`, `user_id`, `sender_relation`), as datas, os ids de correlação, a
+versão do contrato e `available_metrics` (as métricas com leitura disponível, para o filtro da
+silver). Os ids são texto e as datas, `Date` do BSON (precisão de milissegundos).
+O `ingested_at` vem do relógio do Mongo (`hello.localTime`), lido uma vez por tentativa de
+gravação do lote: o cursor da silver (Fase 1.5) compara datas de um relógio só.
+A escrita usa `w="majority", j=True`: o registro que o consumer confirmou ao broker não some
+numa troca de primário. Cada operação tem prazo (`BRONZE_WRITE_TIMEOUT_SECONDS`, com
+`pymongo.timeout`), bem abaixo de dois heartbeats do AMQP. Dentro dele, a espera por um
+servidor também é esse prazo, e não o `MONGO_TIMEOUT_SECONDS`: com o Mongo fora, cada tentativa
+leva até `BRONZE_WRITE_TIMEOUT_SECONDS` antes de virar falha transitória.
+A falha da infraestrutura vira `BronzeUnavailable`, a falha transitória: o servidor fora, em
+eleição ou sem resposta no prazo (`ConnectionFailure` e os erros de prazo), a escrita sem a
+confirmação da maioria (`writeConcernError`) e a recusa que vem da configuração, a credencial
+(código 18) ou a permissão (13). Todas atingem qualquer lote. Qualquer outro erro do Mongo sobe
+como está, e o consumer o trata como bug.
+**Por quê:** o RabbitMQ entrega *at-least-once*, e o app reenvia o lote inteiro quando não
+recebe o 202. O índice único do `_id` é o que torna as duas repetições seguras.
+**Ainda não (Fase 4):** distinguir o duplicado (mesmo remetente) da colisão de `id` (outro
+remetente), que vai para `telemetry_rejections`. Hoje os dois recebem ack.
+**Descartado:** coleção *time-series*, que não aceita índice único; consultar antes de gravar
+(uma ida a mais e uma corrida entre dois consumers); `ordered=True`, que pararia no primeiro
+duplicado; tratar a credencial recusada como bug, que mandaria a fila inteira para a DLQ em
+`AMQP_DELIVERY_LIMIT` rodadas por causa de uma senha errada; gravar sem prazo, que prenderia o
+consumer num servidor que aceita a conexão e não responde, até o broker o derrubar por falta de
+heartbeat (e aí a entrega conta).
+
+### O destino de cada mensagem: ack, DLQ ou de volta à fila
+O `RabbitTelemetryConsumer` consome com ack manual e `prefetch` (`AMQP_PREFETCH`). A resposta
+ao broker depende do que aconteceu:
+
+| Situação | Resposta | Conta para o `delivery-limit`? |
+|---|---|---|
+| Gravou, duplicados incluídos | `basic_ack` | — |
+| Fora do contrato (`ContractError`: JSON inválido, versão desconhecida) | `basic_reject(requeue=False)` → DLQ | — |
+| Bronze fora (`BronzeUnavailable`) | `basic_nack(requeue=True)` e uma pausa que dobra a cada falha seguida (0,5 s → 30 s) | não |
+| Qualquer outra exceção (bug, documento recusado) | `basic_reject(requeue=True)` | sim: passado o limite, DLQ |
+
+**Por quê:** no RabbitMQ 4.3+, a fila quorum conta como falha o `reject` com requeue e a queda
+da conexão com a mensagem pendente, mas não o `nack` com requeue. O `nack` é o "ainda não":
+com o Mongo fora, todas as mensagens esperam na fila, sem ir para a DLQ. O `reject` é o "deu
+errado": uma mensagem que derruba o handler sai da frente depois de `AMQP_DELIVERY_LIMIT`
+tentativas, em vez de travar a fila.
+A pausa usa `connection.sleep` do pika em fatias de 1 s, que continua atendendo o heartbeat (o
+`time.sleep` derrubaria a conexão) e para quando o processo recebe SIGTERM.
+**Descartado:** `nack` para o bug, que nunca chegaria à DLQ; fechar o canal quando o bronze cai
+(o que o plano previa), porque a queda do canal com mensagens pendentes conta para o limite, e
+uma queda longa do Mongo mandaria mensagens boas para a DLQ; filas de espera com TTL, porque a
+falha transitória aqui é da infraestrutura e atinge todas as mensagens: o certo é pausar o
+consumo, e não atrasar uma mensagem.
+**Rede de segurança:** `tests/rabbitmq/test_consumo.py` confere a contagem contra o broker de
+verdade: a falha transitória repetida mais vezes que o limite não chega à DLQ, e o bug chega
+nela depois de exatamente `limite + 1` tentativas, com `x-first-death-reason: delivery_limit`.
+
+### Parada e queda: o sinal pede a parada, a queda do broker encerra o processo
+O `flask consumer run` instala handlers de SIGTERM e SIGINT que só pedem a parada: o consumidor
+termina a mensagem corrente, devolve as outras à fila com `nack` (que não conta) e fecha.
+No container, o processo é o PID 1, que o kernel não deixa morrer pelo SIGTERM sem um
+handler: sem ele, o `docker compose stop` esperaria os 10 s e mataria.
+Se o broker cai ou a fila não existe, o consumo levanta `ConsumerFailed` e o comando sai com
+código 1. O que estava em voo, sem ack, volta para a fila, e o `restart: unless-stopped` do
+compose sobe o processo de novo.
+**Por quê:** a parada limpa e a pausa com backoff já são necessárias para o primeiro critério
+da fatia (o consumer parado, a fila acumula; de volta, ela drena). A reconexão no próprio
+processo, com o servidor de saúde em :8081, é da Fase 5.
+**Custo aceito:** até a Fase 5, o consumer não tem healthcheck no compose, e um broker que cai
+e volta custa um reinício do processo.
 
 ---
 
@@ -498,12 +603,12 @@ Com dois processos HTTP, e réplicas deles, migrar na subida faria vários `alem
 disputarem o mesmo banco vazio. O serviço `setup` do compose (`docker/setup.sh`) migra e
 termina. O `api` e o `bronze-api` sobem com `RUN_MIGRATIONS=0` e só depois que o `setup`
 termina com sucesso (`service_completed_successfully`). Ele também aplica a topologia do
-RabbitMQ (`flask rabbitmq setup`), e por isso espera o broker ficar saudável; os índices do
-Mongo entram quando existirem.
-**Por que o comando mora no `ext/rabbitmq.py`, e não no `ext/commands.py`:** o perfil
-`[setup]` carrega só o `ext.observability` e o `ext.rabbitmq`, e o `ext.commands` traria o
-banco e o container. O comando de operação fica na extensão dona da infraestrutura, num grupo
-com o nome do módulo (`flask rabbitmq …`, e depois `flask mongo …`).
+RabbitMQ (`flask rabbitmq setup`) e os índices do bronze (`flask mongo setup`), e por isso
+espera o broker e o Mongo ficarem saudáveis. O `consumer` também espera o `setup`.
+**Por que o comando mora na extensão, e não no `ext/commands.py`:** o perfil `[setup]` carrega
+só o `ext.observability`, o `ext.mongo` e o `ext.rabbitmq`, e o `ext.commands` traria o banco
+e o container. O comando de operação fica na extensão dona da infraestrutura, num grupo com o
+nome do módulo (`flask rabbitmq …`, `flask mongo …`).
 **O padrão do entrypoint continua `RUN_MIGRATIONS=1`:** um container avulso da imagem, como o
 do `/smoke-api`, migra sozinho, como sempre fez.
 **Descartado:** migrar na subida de cada processo com uma trava no banco

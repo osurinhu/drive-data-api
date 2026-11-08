@@ -3,7 +3,9 @@
 Cada teste começa com o banco vazio: as coleções (e os índices delas) são
 apagadas depois de cada um. A limpeza das tabelas do Postgres, autouse no
 conftest da raiz, é anulada aqui, e o ``mongo_db`` vem de uma aplicação mínima,
-só com ``ext.mongo``: estes testes não usam o Postgres.
+só com ``ext.mongo``: estes testes não usam o Postgres. O contexto dessa aplicação
+fica aberto durante cada teste, porque os adaptadores de ``repository/mongo``
+pedem o banco à ``ext.mongo`` (``mongo.db``).
 """
 
 import pytest
@@ -16,10 +18,13 @@ def _clean_tables():
 
 
 @pytest.fixture(autouse=True)
-def _limpar_bronze(mongo_db):
-    yield
-    # A trava é o sufixo: a suíte apaga coleções, e o banco de desenvolvimento
-    # nunca pode ser o alvo, nem por engano de configuração.
-    assert mongo_db.name.endswith("_test"), mongo_db.name
-    for colecao in mongo_db.list_collection_names():
-        mongo_db.drop_collection(colecao)
+def _contexto_do_mongo(_app_do_mongo):
+    """O ``current_app`` dos adaptadores durante o teste."""
+    with _app_do_mongo.app_context():
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _limpar_bronze(bronze_limpo):
+    """O banco de testes do Mongo é apagado depois de cada teste (``bronze_limpo``)."""
+    return bronze_limpo

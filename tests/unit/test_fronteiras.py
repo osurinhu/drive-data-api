@@ -4,16 +4,25 @@ Ler em vez de importar é de propósito: o teste não pode carregar justamente o
 que ele proíbe. O preço é não enxergar import dinâmico (``importlib``), que o
 projeto não usa.
 
-Guarda as regras do domínio e a do pipeline de telemetria, escritas como listas
-de permitidos: o que não está nelas reprova, inclusive a biblioteca que ninguém
-lembrou de proibir. O ``domain/`` tem duas partes: o ORM (``ORM``, abaixo) e o
-vocabulário, que é todo o resto. Arquivo novo de vocabulário cai sozinho na regra
-estrita; só escapa dela quem tem o nome na lista do ORM. O mesmo vale para o
-arquivo novo de ``service/telemetry/``.
+Guarda dois tipos de regra.
+
+* **Os imports de cada módulo**, para o domínio e o pipeline de telemetria,
+  escritos como listas de permitidos: o que não está nelas reprova, inclusive a
+  biblioteca que ninguém lembrou de proibir. O ``domain/`` tem duas partes: o ORM
+  (``ORM``, abaixo) e o vocabulário, que é todo o resto. Arquivo novo de
+  vocabulário cai sozinho na regra estrita; só escapa dela quem tem o nome na
+  lista do ORM. O mesmo vale para o arquivo novo de ``service/telemetry/``.
+* **O fecho de imports** (tudo o que um módulo carrega, direta ou indiretamente)
+  dos dois lados do pipeline e das duas tecnologias do repositório: o consumer
+  não alcança o lado HTTP nem o SQL, o producer não alcança o Mongo, e cada
+  pasta do repositório fica na sua tecnologia. A fila é a única ligação entre o
+  producer e o consumer.
 """
 
 import ast
 import sys
+import tomllib
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -202,3 +211,176 @@ def test_a_regra_do_pipeline(importados, proibidos):
 )
 def test_a_regra_do_orm(importados, proibidos):
     assert _proibidos_no_orm(importados) == proibidos
+
+
+# --- Fechos de import -----------------------------------------------------------
+
+#: O processo consumer, a partir de todas as extensões do perfil dele: um import
+#: dentro de uma função de qualquer uma (só um caminho raro o executa) também conta.
+CONSUMER = tuple(
+    tomllib.loads((APP.parent / "settings.toml").read_text(encoding="utf-8"))["consumer"][
+        "EXTENSIONS"
+    ]
+)
+FORA_DO_CONSUMER = (
+    "blueprint",
+    "ext.auth",
+    "ext.container",
+    "ext.database",
+    "repository.sql",
+    "domain.base",
+    "domain.models",
+    "service.telemetry.ingest_",
+    "messaging.publisher",
+    "sqlalchemy",
+    "flask_sqlalchemy",
+    "flask_jwt_extended",
+)
+
+#: O lado do producer no pipeline: a rota, o serviço e o publisher. O
+#: ``ext.container`` não é seguido: é a raiz de composição dos dois processos HTTP e
+#: vai montar também o leitor do bronze do ``bronze-api`` (passo 1.5). Quem decide o
+#: que cada processo conecta é o perfil (``EXTENSIONS``), e o ``test_composicao.py``
+#: confere o processo montado.
+PRODUCER = (
+    "blueprint.restapi.v1.telemetry",
+    "service.telemetry.ingest_service",
+    "messaging.publisher",
+)
+FORA_DO_PRODUCER = (
+    "ext.mongo",
+    "ext.consumer",
+    "repository.mongo",
+    "service.telemetry.bronze_",
+    "messaging.consumer",
+    "pymongo",
+)
+
+#: Cada pasta do repositório fica na sua tecnologia, e nenhuma sobe para o serviço.
+FORA_DA_TECNOLOGIA = {
+    "sql": ("pymongo", "ext.mongo", "repository.mongo", "service"),
+    "mongo": (
+        "sqlalchemy",
+        "flask_sqlalchemy",
+        "ext.database",
+        "repository.sql",
+        "domain.base",
+        "domain.models",
+        "service",
+    ),
+}
+
+
+def _arquivo_do_modulo(nome: str) -> Path | None:
+    caminho = APP.joinpath(*nome.split("."))
+    if caminho.with_suffix(".py").is_file():
+        return caminho.with_suffix(".py")
+    if (caminho / "__init__.py").is_file():
+        return caminho / "__init__.py"
+    return None
+
+
+def _fecho(inicio: Iterable[str], *, sem_seguir: Iterable[str] = ()) -> set[str]:
+    """Os módulos do projeto alcançados a partir de ``inicio``, e os nomes de
+    biblioteca que eles importam (``pika``, ``sqlalchemy.orm``).
+
+    Importar ``a.b.c`` executa também ``a`` e ``a.b``. Um nome de ``sem_seguir``
+    entra no fecho, mas os imports dele, não.
+    """
+    nao_seguir = set(sem_seguir)
+    vistos: set[str] = set()
+    pendentes = list(inicio)
+    while pendentes:
+        nome = pendentes.pop()
+        if nome in vistos:
+            continue
+        vistos.add(nome)
+        arquivo = _arquivo_do_modulo(nome)
+        if arquivo is None or nome in nao_seguir:
+            continue
+        partes = nome.split(".")
+        pendentes.extend(".".join(partes[:i]) for i in range(1, len(partes)))
+        pendentes.extend(_importados(arquivo))
+    return vistos
+
+
+def _alcancados(fecho: set[str], proibidos: Iterable[str]) -> list[str]:
+    """Os nomes do fecho que casam com algum proibido. ``"x."`` casa o pacote ``x`` e
+    o que está dentro dele; um padrão terminado em ``_`` é prefixo de nome
+    (``service.telemetry.ingest_`` casa ``ingest_rules`` e ``ingest_service``)."""
+
+    def casa(nome: str, padrao: str) -> bool:
+        if padrao.endswith("_"):
+            return nome.startswith(padrao)
+        return nome == padrao or nome.startswith(f"{padrao}.")
+
+    return sorted(nome for nome in fecho if any(casa(nome, p) for p in proibidos))
+
+
+def test_o_fecho_segue_os_imports_do_projeto():
+    """Sem isto, um caminho errado faria os testes abaixo passarem sem olhar nada."""
+    assert {"ext.consumer", "ext.consumer_container"} <= set(CONSUMER)
+    assert _fecho(CONSUMER) >= {
+        "ext.mongo",
+        "repository.mongo.bronze_writer",
+        "service.telemetry.bronze_ingest_service",
+        "messaging.consumer",
+        "domain.contracts.telemetry_batch",
+        "pymongo",
+        "pika",
+    }
+    assert _fecho(PRODUCER, sem_seguir={"ext.container"}) >= {
+        "ext.auth",
+        "repository.sql.user_repository",
+        "messaging.connection",
+        "ext.container",
+    }
+
+
+def test_o_consumer_nao_alcanca_o_lado_http_nem_o_sql():
+    """Falhou? Um módulo do consumer passou a importar, direta ou indiretamente, o
+    lado HTTP, o SQL ou o lado do producer. O processo consumer carregaria o que
+    não usa e passaria a depender do Postgres ou do JWT. O que os dois lados
+    compartilham são as folhas do domínio e a conexão com o broker
+    (``messaging.connection``); o resto atravessa a fila."""
+    assert _alcancados(_fecho(CONSUMER), FORA_DO_CONSUMER) == []
+
+
+def test_o_producer_nao_alcanca_o_bronze():
+    """Falhou? O lado do producer passou a importar o Mongo ou o lado do consumer.
+    A queda do Mongo derrubaria a ingestão, que só depende da fila."""
+    assert _alcancados(_fecho(PRODUCER, sem_seguir={"ext.container"}), FORA_DO_PRODUCER) == []
+
+
+@pytest.mark.parametrize("tecnologia", sorted(FORA_DA_TECNOLOGIA))
+def test_cada_pasta_do_repositorio_fica_na_sua_tecnologia(tecnologia):
+    """Falhou? Um adaptador SQL alcançou o Mongo, ou o contrário, ou um adaptador
+    subiu para o serviço. O consumer importa ``repository.mongo`` e nunca pode
+    carregar o SQL por tabela."""
+    pasta = APP / "repository" / tecnologia
+    arquivos = sorted(pasta.rglob("*.py"))
+    assert arquivos, pasta
+
+    for arquivo in arquivos:
+        fecho = _fecho([_nome_do_modulo(arquivo)])
+        assert _alcancados(fecho, FORA_DA_TECNOLOGIA[tecnologia]) == [], arquivo
+
+
+@pytest.mark.parametrize(
+    ("nomes", "alcancados"),
+    [
+        pytest.param(
+            {"repository.sql", "repository.sql.user"},
+            ["repository.sql", "repository.sql.user"],
+            id="o pacote e o que está nele",
+        ),
+        pytest.param({"repository.sqlite"}, [], id="outro nome com o mesmo começo"),
+        pytest.param(
+            {"service.telemetry.ingest_rules"},
+            ["service.telemetry.ingest_rules"],
+            id="prefixo de nome",
+        ),
+    ],
+)
+def test_a_regra_do_fecho(nomes, alcancados):
+    assert _alcancados(nomes, ("repository.sql", "service.telemetry.ingest_")) == alcancados

@@ -27,8 +27,10 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
   Mensagem de configuração inválida nunca repete a URL ou a URI, nem em pedaços: ela leva a
   senha. Use mensagem fixa com `from None`, porque o erro da biblioteca repete trechos dela.
 - Extensão não importa extensão. A ressalva de 01-arquitetura ("Regras de dependência"):
-  `ext.config` (o carregador `load_routes`, usado por `ext.api`) e `ext.database` (a instância
-  `db`, usada por repositórios e por `ext.commands`) podem ser importadas. Algo novo que duas
+  `ext.config` (o carregador `load_routes`, usado por `ext.api`), `ext.database` (a instância
+  `db`, usada por repositórios e por `ext.commands`) e `ext.mongo` (o cliente, usado pelos
+  adaptadores de `repository/mongo/`) podem ser importadas. O `ext.mongo` importa de volta só o
+  `repository.mongo.indexes`, que não importa `ext`. Algo novo que duas
   extensões precisem vira módulo neutro fora de `ext/`, como `instrumentation/` (que guarda o
   `request_context.py`) ou o `blueprint/http_errors.py` — que não é folha (importa
   `service.errors`) e é usado só por extensões e rotas. Ele nunca importa `ext`, e o
@@ -53,9 +55,15 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
 - Comando CLI (`ext/commands.py`): `@click.command` + `@with_appcontext`; serviços saem de
   `current_app.container.x_service()` (o comando não toca repositório nem sessão); erro de domínio
   vira `click.ClickException(str(erro))`; acrescente o comando à tupla do `init_app`. Exceção:
-  o comando de operação de uma infraestrutura (`flask rabbitmq setup`) fica na extensão dona
-  dela, num `AppGroup` com o nome do módulo, registrado no `init_app` (03-como-estender §8): o
-  perfil `[setup]` não carrega o `ext.commands`, que traz banco e container.
+  o comando de operação de uma infraestrutura (`flask rabbitmq setup`, `flask mongo setup`)
+  fica na extensão dona dela, num `AppGroup` com o nome do módulo, registrado no `init_app`
+  (03-como-estender §8): o perfil `[setup]` não carrega o `ext.commands`, que traz banco e
+  container. O processo de longa duração (`flask consumer run`) tem a extensão dele
+  (`ext/consumer.py`), que só o perfil `[consumer]` carrega.
 - Container (`ext/container.py`): repositório e serviço novos são dois `providers.Factory`.
   Adaptador com conexão (o publisher) é `providers.Singleton`, e o que ele recebe do
   `settings.toml` vem de `config` (`providers.Configuration`), preenchido no `init_app`.
+- O consumer tem o container dele (`ext/consumer_container.py`, `app.consumer_container`), só
+  com o lado do consumer: nada do `ext/container.py` (SQL, publisher, serviços de cadastro)
+  entra ali, e o `test_fronteiras.py` reprova se entrar. O consumidor da fila é `Factory`: cada
+  `flask consumer run` é um processo, e a conexão é do `run`.

@@ -57,6 +57,12 @@ MONGO_DATABASE = "drive_data_bronze"
 # propósito: com o Mongo fora, a requisição falha logo, em vez de prender o worker
 # do gunicorn até o timeout dele (30 s).
 MONGO_TIMEOUT_SECONDS = 5
+# Prazo de cada operação do consumer no bronze (a hora do servidor, a gravação do
+# lote), inclusive a espera por um servidor: dentro dele, o MONGO_TIMEOUT_SECONDS
+# não vale. Estourou, o lote volta para a fila sem contar como falha, como com o
+# Mongo fora. Fica bem abaixo de dois heartbeats do AMQP: o consumer que espera mais que
+# isso perde a conexão com o broker, e aí a entrega conta.
+BRONZE_WRITE_TIMEOUT_SECONDS = 10
 
 # --- RabbitMQ (fila da telemetria) --------------------------------------------
 # A URL, com usuário, senha e vhost, vem de FLASK_AMQP_URL.
@@ -65,6 +71,15 @@ AMQP_URL = ""
 AMQP_TIMEOUT_SECONDS = 5
 # O broker derruba a conexão que passar dois intervalos sem sinal.
 AMQP_HEARTBEAT_SECONDS = 60
+# Mensagens entregues ao consumer e ainda sem confirmação, por conexão. Elas
+# esperam no próprio consumer enquanto ele grava a anterior; o que não foi
+# confirmado volta para a fila se ele cair.
+AMQP_PREFETCH = 20
+# Entregas que falharam (o consumer recusou com reject, ou caiu com a mensagem
+# pendente) antes de a mensagem ir para a DLQ. Vai na policy da fila, aplicada pelo
+# `flask rabbitmq setup`: mudar aqui exige rodar o setup de novo. A falha transitória
+# (o bronze fora) não conta.
+AMQP_DELIVERY_LIMIT = 10
 # A API de gerenciamento (http://usuario:senha@host:15672), por onde o job setup
 # aplica a topologia (`flask rabbitmq setup`). Vem de FLASK_AMQP_MANAGEMENT_URL, e só
 # o setup a recebe: os processos que publicam ou consomem não têm a credencial de
@@ -115,10 +130,12 @@ EXTENSIONS = [
     "ext.mongo",
     "ext.rabbitmq",
     "ext.container",
+    "ext.consumer_container",
     "ext.auth",
     "ext.cors",
     "ext.error_handler",
     "ext.commands",
+    "ext.consumer",
     "ext.api",
 ]
 
@@ -186,22 +203,25 @@ API_V1_ROUTES = [
 ]
 HEALTH_CRITICAL = ["database", "mongo"]
 
-# Consumer: lê a fila e grava no bronze. Sem HTTP, sem Postgres e sem JWT.
+# Consumer: lê a fila e grava no bronze (`flask consumer run`). Sem HTTP, sem
+# Postgres e sem JWT; o container de DI é o próprio (ext.consumer_container).
 [consumer]
 EXTENSIONS = [
     "ext.observability",
     "ext.mongo",
     "ext.rabbitmq",
+    "ext.consumer_container",
+    "ext.consumer",
 ]
 API_V1_ROUTES = []
 # Sem rota, sem /health/: nada aqui é crítico para um health que não existe.
 HEALTH_CRITICAL = []
 
-# Job de preparação (docker/setup.sh): as migrações e a topologia do RabbitMQ. As
-# migrações rodam pelo Alembic, que lê a configuração sem montar a aplicação; a
-# topologia, pelo `flask rabbitmq setup`, que o ext.rabbitmq registra. O ext.mongo
-# entra junto com os índices do bronze.
+# Job de preparação (docker/setup.sh): as migrações, a topologia do RabbitMQ e os
+# índices do bronze. As migrações rodam pelo Alembic, que lê a configuração sem
+# montar a aplicação; a topologia e os índices, pelos comandos `flask rabbitmq
+# setup` e `flask mongo setup`, que as duas extensões registram.
 [setup]
-EXTENSIONS = ["ext.observability", "ext.rabbitmq"]
+EXTENSIONS = ["ext.observability", "ext.mongo", "ext.rabbitmq"]
 API_V1_ROUTES = []
 HEALTH_CRITICAL = []
