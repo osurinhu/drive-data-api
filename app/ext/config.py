@@ -16,7 +16,7 @@ from pathlib import Path
 from dynaconf import FlaskDynaconf
 from flask import Flask
 from flask.config import Config
-from flask_smorest import Api, Blueprint
+from flask_smorest import Api
 
 # Caminho absoluto, para que a descoberta do settings.toml não dependa do
 # diretório de trabalho.
@@ -83,11 +83,13 @@ def load_extensions(app: Flask) -> None:
         module.init_app(app)
 
 
-def load_routes(app: Flask, api: Api, parent: Blueprint, config_key: str) -> None:
-    """Registra os blueprints de ``config_key`` sob um blueprint pai versionado
-    (ex.: ``/api/v1``), para que a versão da API fique declarada num lugar só."""
-    for module_path in app.config.get(config_key, []):
-        module = import_module(module_path)
-        parent.register_blueprint(module.blp)
+def load_routes(app: Flask, api: Api, url_prefix: str, config_key: str) -> None:
+    """Registra no ``api`` os blueprints de ``config_key``, abaixo de ``url_prefix``
+    (ex.: ``/api/v1``).
 
-    api.register_blueprint(parent)
+    Cada um é registrado direto, sem blueprint pai: o flask-smorest agrupa o Swagger pelo
+    blueprint registrado no ``Api``, e com um pai tudo cairia no grupo dele.
+    """
+    for module_path in app.config.get(config_key, []):
+        blp = import_module(module_path).blp
+        api.register_blueprint(blp, url_prefix=f"{url_prefix}{blp.url_prefix or ''}")

@@ -38,8 +38,9 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
   `blueprint.http_errors`, e qualquer um dos dois fecharia o ciclo. Vocabulário puro vira folha
   do domínio (`rules/dominio.md`). Nada novo fica solto na raiz de `app/`: lá só mora o
   `app.py`.
-- `ERROR_STATUS` (`blueprint/http_errors.py`) é o único mapa exceção → status; `STATUS_DESCRIPTION` alimenta
-  a mensagem padrão e o OpenAPI. O handler genérico não engole `HTTPException`.
+- `ERROR_STATUS` (`blueprint/http_errors.py`) é o único mapa exceção de domínio → status; `STATUS_DESCRIPTION` alimenta
+  a mensagem padrão e o OpenAPI. O handler genérico não engole `HTTPException`. O `RecursionError`
+  (JSON aninhado demais) tem handler próprio: não é de domínio, e o handler deixa um aviso no log.
 - Configuração não sensível vai para `settings.toml` (`[default]`). Sensível vai para variável
   `FLASK_*`, documentada em `.env.example` com valor de exemplo, nunca real. Leitura:
   `app.config[...]` no `init_app`, `current_app.config[...]` na requisição. Se for obrigatória,
@@ -48,8 +49,8 @@ Infraestrutura fora do caminho da requisição. Receitas: 03-como-estender §7, 
   lista no perfil substitui a do `[default]` inteira. Perfil sem rota declara
   `HEALTH_CRITICAL = []`: herdado, o `["database"]` do `[default]` reprovaria no
   `test_composicao.py`. `FLASK_PROCESS` escolhe o perfil, e um nome que não é seção
-  reprova a subida. Na suíte, nunca monte a aplicação de outro perfil (o `api` e o `v1` de
-  `ext.api` são globais): leia a configuração com `build_config()` ou suba um processo à parte,
+  reprova a subida. Na suíte, nunca monte a aplicação de outro perfil (o `api` de
+  `ext.api` é global): leia a configuração com `build_config()` ou suba um processo à parte,
   como no `test_composicao.py`.
 - Constante validada por schema (ex.: limites de paginação) fica com o schema, não na configuração.
 - Comando CLI (`ext/commands.py`): `@click.command` + `@with_appcontext`; serviços saem de

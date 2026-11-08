@@ -47,6 +47,19 @@ def _handle_unmapped_service_error(error: ServiceError):
     return error_response(500, STATUS_DESCRIPTION[500])
 
 
+def _handle_recursion(_error: RecursionError):
+    """JSON aninhado demais: o ``json.loads`` estoura a pilha, e o webargs só trata
+    ``JSONDecodeError`` e ``UnicodeDecodeError``. É entrada ruim, como o JSON malformado.
+
+    Um bug de recursão na aplicação cairia aqui também: por isso o log.
+    """
+    current_app.logger.warning(
+        "[req=%s] Pilha estourada ao tratar a requisição: JSON aninhado demais?",
+        current_request_id(),
+    )
+    return error_response(400, STATUS_DESCRIPTION[400])
+
+
 def _handle_unexpected(error: Exception):
     # Se o flask-smorest não registrou seu próprio handler de HTTPException,
     # este genérico receberia também os erros HTTP — repassa a resposta original.
@@ -62,6 +75,8 @@ def _handle_unexpected(error: Exception):
 def init_app(app: Flask) -> None:
     for exception, status in ERROR_STATUS.items():
         app.register_error_handler(exception, _handler_for(status))
+
+    app.register_error_handler(RecursionError, _handle_recursion)
 
     # O Flask resolve pela MRO, então estes dois só pegam o que os específicos
     # acima não pegaram.

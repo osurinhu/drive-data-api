@@ -89,7 +89,7 @@ do shell) e encerra todas as sessões da conta.
 |---|---|---|---|---|
 | `api` | `api` | 5000 | Postgres, RabbitMQ | 503 sem o Postgres; 200 `degraded` sem o RabbitMQ |
 | `bronze-api` | `bronze_api` | 5001 | Postgres, Mongo | 503 sem qualquer um dos dois (e a leitura do bronze, 503 sem o Mongo) |
-| `consumer` | `consumer` | — | Mongo, RabbitMQ | ainda não tem `/health/`. Sem o Mongo, pausa e as mensagens esperam na fila; sem o RabbitMQ, sai com erro e o compose o reinicia |
+| `consumer` | `consumer` | — | Mongo, RabbitMQ | não tem `/health/`: responde em `:8081/health/live` e `/health/ready`, só dentro do container. Sem o Mongo, pausa e as mensagens esperam na fila; sem o RabbitMQ, fica de pé, não pronto, e reconecta sozinho |
 | `setup` (job) | `setup` | — | Postgres, RabbitMQ (API de gerenciamento), Mongo | termina depois de migrar e aplicar a topologia e os índices |
 
 ```bash

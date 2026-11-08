@@ -114,6 +114,17 @@ contrato.
 Ativamente mantida, baseada em marshmallow/apispec, OpenAPI 3 nativo. O flask-restx tem
 manutenção irregular e atrito com versões recentes de Flask/Werkzeug.
 
+### Cada módulo de rota é registrado direto no `Api`, para o Swagger agrupar por blueprint
+O `load_routes` chama `api.register_blueprint` para cada módulo de `API_V1_ROUTES`, com o prefixo
+da versão (`V1_URL_PREFIX`, em `ext/api.py`). O flask-smorest cria o grupo do Swagger a partir
+do blueprint registrado no `Api`, com o nome e a `description` dele, e a rota nova entra no
+grupo certo sem mais nada.
+**Custo aceito:** sem um pai, o nome do blueprint é único na aplicação. Um `/api/v2` com
+blueprint de mesmo nome precisará de outro `name`.
+**Descartado:** aninhar os módulos sob um blueprint `v1`, como a base nasceu: o aninhado copia a
+documentação para o pai, e todas as operações caíam no grupo `v1`, sem as descrições. E
+`tags=[...]` em cada `@blp.route`, que repetiria o nome e não levaria a `description` ao grupo.
+
 ### Container `dependency-injector`
 A rota declara o serviço que precisa; o container decide como construí-lo. O retorno real
 é teste: trocar uma camada por um dublê sem gambiarra —
@@ -264,6 +275,17 @@ a regra existe uma única vez, para todos os serviços.
 ### Handler de `Exception` que **não** engole `HTTPException`
 Um handler genérico que capturasse `HTTPException` destruiria as respostas 422 de validação
 do smorest e todo `abort()`, trocando-as por um 500 opaco.
+
+### JSON aninhado demais responde 400, e não 500
+Um corpo como `[[[[…` estoura a pilha do `json.loads` (`RecursionError`), e o webargs só trata
+`JSONDecodeError` e `UnicodeDecodeError`. O handler de `RecursionError` (`ext/error_handler.py`)
+responde 400, como ao JSON malformado. Ele fica fora do `ERROR_STATUS`, que só mapeia exceção de
+domínio. Sem ele, qualquer rota com corpo JSON, inclusive o
+`/auth/token`, que é público, daria 500 e escreveria um traceback por requisição.
+**Custo aceito:** um bug de recursão na aplicação também responderia 400. Por isso o handler
+deixa um `warning` com o `request_id`.
+**Descartado:** um parser próprio do webargs só para este caso. Seria mais precisa, mas é uma
+peça a mais para dar a mesma resposta.
 
 ## Pipeline de telemetria
 
@@ -437,6 +459,8 @@ Valor negativo reprova o `setup` antes de tocar em qualquer índice.
 aceita TTL em índice de campo único, e o `ix_ingested` é composto.
 **Reduzir o prazo apaga de verdade**, e não tem volta. Os 365 dias são um padrão técnico: o prazo
 legal (LGPD) ainda precisa de confirmação, e está no checklist do `README.md`.
+**Descartado:** apagar e recriar o índice a cada mudança de prazo. Reconstruí-lo varre a coleção
+inteira, e o `collMod` chega ao mesmo resultado sem esse custo.
 
 ### O formato do lote é estrito, e os limites têm dois níveis
 O schema do envio (`schemas/telemetry_schema.py`) não converte: `available` só aceita booleano, e
@@ -454,7 +478,8 @@ de aninhamento, inteiro fora de 64 bits, número não finito e texto fora do UTF
 daria 500 para sempre, porque o cursor não avança, e qualquer `usuario` travaria a leitura de
 todos. `NaN` sairia como JSON inválido, e os demais levariam o lote à DLQ, ou quebrariam a
 publicação. Basta conferir na entrada HTTP: só o producer publica na fila (a ACL), e o consumer
-não precisa repetir a regra.
+não precisa repetir a regra. Os filtros de data da silver seguem a mesma regra de UTC
+(`domain/moment.py`): sem ela, o `OverflowError` do BSON viraria 500.
 **Dois níveis de limite:** as contagens (500 registros, 64 leituras) ficam no schema, com erro
 por campo; o tamanho do corpo fica em `MAX_CONTENT_LENGTH` (1 MiB, 413), porque recusa antes de
 o JSON ser lido. O teto vale para toda rota do processo, o que não custa nada: nenhuma outra
@@ -795,6 +820,8 @@ o app mobile e a silver não dependem dele. Com a lista vazia, nenhuma resposta 
 origem, e um site alheio não lê a API pelo navegador de quem o visita. O Swagger continua
 funcionando porque é servido na mesma origem da API. Um frontend web entra pelo `settings.toml`,
 com os domínios dele, nunca com `*`.
+**Descartado:** `CORS_ORIGINS = ["*"]`. Nenhum cliente daqui precisa dele, e qualquer site
+poderia ler as respostas da API pelo navegador de quem o visita.
 
 ### Um usuário por processo no RabbitMQ e no Mongo, aplicado pelo job `setup`
 Cada processo conecta só com o que usa:
@@ -1083,8 +1110,8 @@ O que foi aproveitado de cada um:
   `BaseModel`, a extensão de autenticação JWT, os comandos CLI, o handler global de erros,
   o envelope de paginação no corpo da resposta e as dependências com versão pinada.
 - **Do `ocs-api`:** a camada flask-smorest (`MethodView` + schemas marshmallow + OpenAPI
-  automático), o container `dependency-injector`, o `load_routes` que aninha blueprints sob
-  um pai versionado e o pacote `schemas/` dedicado.
+  automático), o container `dependency-injector`, o `load_routes` (que aninhava os blueprints sob
+  um pai versionado, até o Swagger precisar agrupar por blueprint) e o pacote `schemas/` dedicado.
 - **Dos dois:** o factory enxuto e o registro dinâmico de módulos via `settings.toml` — o
   esqueleto que ambos compartilham, mantido intacto.
 

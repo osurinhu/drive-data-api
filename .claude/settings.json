@@ -26,5 +26,10 @@
       "Bash(ruff check --fix:*)",
       "Read(./.env)"
     ]
-  }
+  },
+   "hooks": {
+   "SessionStart": [
+     { "hooks": [ { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/estado-docker.sh\"" } ] }
+   ]
+ }
 }

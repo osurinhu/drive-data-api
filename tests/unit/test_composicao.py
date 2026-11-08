@@ -9,8 +9,8 @@ importa o ``ext.mongo`` pelo leitor do bronze. O [default] é a união dos perfi
 para que a suíte, que roda nele, exercite todos os módulos.
 
 Os testes leem só a configuração (``build_config``): montar a aplicação de outro
-perfil dentro da suíte bagunçaria o ``api`` e o ``v1`` de ``ext.api``, que são
-globais. Os que montam a aplicação o fazem num processo à parte.
+perfil dentro da suíte bagunçaria o ``api`` de ``ext.api``, que é global. Os que
+montam a aplicação o fazem num processo à parte.
 """
 
 import os
@@ -227,6 +227,26 @@ def test_o_processo_so_importa_as_rotas_do_proprio_perfil(perfil, esperadas):
     )
 
     assert rotas == esperadas
+
+
+@pytest.mark.parametrize(
+    ("perfil", "grupos"),
+    [
+        pytest.param("api", "health,auth,registration,vehicle,vehicle_driver,telemetry", id="api"),
+        pytest.param("bronze_api", "health,auth,bronze", id="bronze_api"),
+    ],
+)
+def test_o_swagger_do_processo_tem_um_grupo_por_blueprint_do_perfil(perfil, grupos):
+    """A ordem é a de ``API_V1_ROUTES``, e é a que o Swagger mostra."""
+    spec = '__import__("ext.api", fromlist=["_"]).api.spec.to_dict()'
+    obtidos = _montar_num_processo_a_parte(
+        perfil,
+        f'",".join(tag["name"] for tag in {spec}["tags"])',
+        **AMBIENTE_HTTP,
+        FLASK_MONGO_URI=MONGO_FECHADO,
+    )
+
+    assert obtidos == grupos
 
 
 def test_o_api_nao_inicializa_o_ext_mongo_que_o_container_importa():

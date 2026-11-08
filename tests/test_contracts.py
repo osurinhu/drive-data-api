@@ -5,6 +5,7 @@ CI. Cada um guarda um ponto onde a mesma informação vive em dois arquivos e
 poderia divergir silenciosamente.
 """
 
+import re
 from dataclasses import fields
 
 from blueprint.http_errors import ERROR_STATUS, STATUS_DESCRIPTION, error_response
@@ -160,6 +161,28 @@ def test_so_as_rotas_previstas_sao_publicas():
     }
 
     assert publicas == ROTAS_PUBLICAS
+
+
+def test_cada_operacao_fica_no_grupo_do_seu_blueprint(app):
+    """Falhou? As rotas voltaram a ser registradas sob um blueprint pai: o flask-smorest
+    agrupa o Swagger pelo blueprint registrado no ``Api``, e tudo cairia no grupo do pai."""
+    spec = api.spec.to_dict()
+    blueprint_da_rota = {
+        re.sub(r"<(?:[^:<>]+:)?([^<>]+)>", r"{\1}", regra.rule): regra.endpoint.split(".")[0]
+        for regra in app.url_map.iter_rules()
+    }
+
+    fora_do_grupo = [
+        f"{verbo.upper()} {caminho}: {operacao['tags']}"
+        for caminho, operacoes in spec["paths"].items()
+        for verbo, operacao in operacoes.items()
+        if isinstance(operacao, dict) and operacao["tags"] != [blueprint_da_rota[caminho]]
+    ]
+
+    assert not fora_do_grupo, fora_do_grupo
+    grupos = {tag["name"]: tag["description"] for tag in spec["tags"]}
+    assert set(grupos) == {blueprint_da_rota[caminho] for caminho in spec["paths"]}
+    assert all(grupos.values()), grupos
 
 
 def test_toda_rota_protegida_declara_a_permissao_que_exige(app):

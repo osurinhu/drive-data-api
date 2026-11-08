@@ -25,6 +25,7 @@ from marshmallow import (
 )
 
 from domain.metric import INVALID_METRIC_MESSAGE, is_valid_metric
+from domain.moment import INVALID_MOMENT_MESSAGE, fits_in_utc
 from domain.ports import NO_FILTERS, BronzeCursor, BronzeFilters, BronzePosition
 from domain.vin import INVALID_VIN_MESSAGE, is_valid_vin, normalize_vin
 
@@ -141,6 +142,11 @@ def _metrica_valida(value: str) -> None:
         raise ValidationError(INVALID_METRIC_MESSAGE)
 
 
+def _data_que_cabe_em_utc(value: datetime) -> None:
+    if not fits_in_utc(value):
+        raise ValidationError(INVALID_MOMENT_MESSAGE)
+
+
 class BronzeQuerySchema(Schema):
     """Parâmetros da leitura, na query string. O ``load`` devolve ``after`` (a posição do
     cursor), ``ingested_from``, ``filters`` (um ``BronzeFilters``) e ``limit``."""
@@ -154,6 +160,7 @@ class BronzeQuerySchema(Schema):
     )
     ingested_from = fields.AwareDateTime(
         load_default=None,
+        validate=_data_que_cabe_em_utc,
         metadata={"description": "Começa dos gravados a partir daqui. Só sem `cursor`."},
     )
     vin = fields.Str(
@@ -172,13 +179,16 @@ class BronzeQuerySchema(Schema):
     )
     collected_from = fields.AwareDateTime(
         load_default=None,
+        validate=_data_que_cabe_em_utc,
         metadata={
             "description": "Coletados a partir daqui. Recorte grande: combine com `vin` ou "
             "`ingested_from`, porque a data de coleta não tem índice."
         },
     )
     collected_to = fields.AwareDateTime(
-        load_default=None, metadata={"description": "Coletados até aqui, inclusive."}
+        load_default=None,
+        validate=_data_que_cabe_em_utc,
+        metadata={"description": "Coletados até aqui, inclusive."},
     )
     limit = fields.Int(
         load_default=DEFAULT_LIMIT,

@@ -23,7 +23,7 @@ CLAUDE.md    /nova-entidade   /verificar    revisor-      rules/documentacao.md
 | `skills/migracao/` | `/migracao`: gerar, revisar e validar migração Alembic | `/migracao`, ou ao mudar modelo |
 | `skills/nova-entidade/` | `/nova-entidade`: receita 1 ponta a ponta | `/nova-entidade`, ou ao pedir entidade nova |
 | `skills/smoke-api/` (`SKILL.md` + `smoke.sh`) | `/smoke-api`: a imagem de produção num container avulso com banco descartável, conferida por HTTP | `/smoke-api`, ou ao pedir para rodar, subir ou testar a API |
-| `skills/smoke-pipeline/` (`SKILL.md` + `smoke.sh` + `fluxo.py` + `compose.override.yml`) | `/smoke-pipeline`: os três processos reais num projeto do compose à parte, sem porta no host e com volumes descartáveis, conferidos por HTTP do app à silver | `/smoke-pipeline`, ou ao concluir mudança no caminho do pipeline |
+| `skills/smoke-pipeline/` (`SKILL.md` + `smoke.sh` + `fluxo.py` + `caos.py` + `observabilidade.py` + `compose.override.yml`) | `/smoke-pipeline`: os três processos reais num projeto do compose à parte, sem porta no host e com volumes descartáveis, conferidos por HTTP do app à silver | `/smoke-pipeline`, ou ao concluir mudança no caminho do pipeline |
 | `skills/medir-consultas/` | `/medir-consultas`: conta o SQL de uma operação e detecta N+1 (modelo de medição + modo `medir` do `verificar.sh`) | `/medir-consultas`, ou antes de otimizar consulta |
 | `agents/revisor-arquitetura.md` | revisão independente do diff, só leitura | ao fim de mudança não trivial |
 | `hooks/estado-docker.sh` | uma linha sobre o estado do Docker e dos serviços `db`, `mongo`, `rabbitmq`, `api`, `bronze-api` e `consumer` | início, retomada, `/clear` e compactação da sessão (hook `SessionStart`) |
@@ -51,9 +51,9 @@ Preferências pessoais vão em `settings.local.json`, que não é versionado.
 | 1 | `/migracao` | feito; validados o rebuild do `api` e o `alembic check`. Falta exercitar com mudança real de modelo |
 | 1 | `/nova-entidade` | feito; validar e ajustar no primeiro uso real |
 | 1 | `revisor-arquitetura` | feito e validado num ensaio sobre o molde `Item`: zero bloqueantes; os trechos das regras que gerariam falso positivo foram corrigidos (ver registro) |
-| 2 | `/smoke-api`: a imagem de produção num container avulso, com banco descartável, um usuário por papel (`flask create-user`), a matriz 401/403/404/409/422 por curl e o `X-Request-ID` rastreado no log — também é a skill que o `/run` embutido procura | feito em 2026-11-06 e validado: 24 verificações em ~30 s, `db` e `api` de desenvolvimento intocados, caminho de falha conferido por mutação. Falta a permissão no `settings.json` (ver registro) |
-| 2 | Hook `SessionStart` com uma linha de estado do Docker (daemon, `db`, `api`) | script feito e validado em 4 cenários; **falta registrá-lo no `settings.json`** (ver registro) |
-| 2 | `/smoke-pipeline`: o compose inteiro num projeto à parte (`-p smoke-pipeline`), na imagem de produção, com um usuário por papel, a matriz da leitura do bronze e o lote do app à silver, sem perda e sem repetição, e o caos (Fase 5) | feito em 2026-11-07 (passo 1.5) e validado: 18 verificações em ~4 min, sem tocar no ambiente de desenvolvimento. Falta a permissão no `settings.json` (ver registro) |
+| 2 | `/smoke-api`: a imagem de produção num container avulso, com banco descartável, um usuário por papel (`flask create-user`), a matriz 401/403/404/409/422 por curl e o `X-Request-ID` rastreado no log — também é a skill que o `/run` embutido procura | feito em 2026-11-06 e validado: 24 verificações em ~30 s, `db` e `api` de desenvolvimento intocados, caminho de falha conferido por mutação. A permissão já está no `settings.json` |
+| 2 | Hook `SessionStart` com uma linha de estado do Docker (daemon, `db`, `api`) | script feito e validado em 4 cenários; registrado no `settings.json` em 2026-11-08 |
+| 2 | `/smoke-pipeline`: o compose inteiro num projeto à parte (`-p smoke-pipeline`), na imagem de produção, com um usuário por papel, a matriz da leitura do bronze e o lote do app à silver, sem perda e sem repetição, e o caos (Fase 5) | feito em 2026-11-07 (passo 1.5) e validado: 18 verificações em ~4 min, sem tocar no ambiente de desenvolvimento. A permissão já está no `settings.json` |
 | 2 | `/remover-exemplo`: tirar `Item` com segurança quando houver entidades reais | feito à mão na Fase 3 do pipeline (2026-11-08, migração 0006). Era operação de uma vez só: a skill não chegou a existir |
 | 3 | `/medir-consultas` (padrão `sql_log` / `test_write_cost`) antes de otimizar | feito em 2026-11-06 e validado: referência de `Item` medida; N+1 provocado por mutação (23 SELECT) e remédio com `selectinload` medido (4); trava contra a medição esquecida conferida |
 | 3 | `memory: project` no revisor, para acumular erros recorrentes | avaliado em 2026-11-06: adiado. Duas revisões ainda não mostram erro recorrente, e a memória daria ao revisor escrita no repositório e o viés das revisões anteriores. Reavaliar quando o mesmo achado se repetir em revisões diferentes |
@@ -555,3 +555,21 @@ sugestão que restava, um contrato para o método de escrita sem `@permission_re
   depois deles. `/smoke-api` verde no estado final. `/smoke-pipeline` verde antes do `_guardavel`;
   a repetição foi encerrada por falta de memória, com 33 verificações OK e nenhuma falha, antes do
   caos.
+- 2026-11-08 — Fechamento pós-Fase 7, depois de conferir o plano contra o código: nenhuma
+  funcionalidade faltava.
+  - **Dois 500 por entrada hostil corrigidos:** data extrema nos filtros da silver (a regra do
+    `collected_at` foi para a folha `domain/moment.py`, usada pelos dois schemas) e JSON aninhado
+    demais (handler de `RecursionError`: 400 com aviso no log, fora do `ERROR_STATUS`).
+  - **`/security-review`:** rodou de verdade depois do `git remote set-head origin main` (só
+    referência local), sem achado HIGH ou MEDIUM.
+  - **Hook `SessionStart`:** registrado pelo usuário no `settings.json`.
+  - **Em aberto:** ` ` em texto que vai ao Postgres responde 500 (confirmado por HTTP em
+    `/auth/token`), e `ingested_from` anterior a 1970 com página vazia devolve um cursor que a
+    próxima chamada recusa com 422 (lido no código).
+  - **Contagens:** `/verificar tudo` com 679 testes; `/smoke-api` com 53 verificações;
+    `/smoke-pipeline` com 50, caos incluído.
+- 2026-11-08 — Swagger agrupado por blueprint. As operações caíam todas no grupo `v1`, porque o
+  blueprint aninhado copia a documentação para o pai. O `load_routes` agora registra cada módulo
+  direto no `Api`, com `V1_URL_PREFIX`, e o pai saiu. As 19 rotas são as mesmas de antes (só o nome
+  interno do endpoint perdeu o `v1.`). `/verificar tudo` com 682 testes; `/smoke-api` com 53
+  verificações; `/smoke-pipeline` verde.

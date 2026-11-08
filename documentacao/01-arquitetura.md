@@ -85,7 +85,7 @@ tempo.
 | **Rota** | `app/blueprint/restapi/v1/` | Traduzir HTTP em chamada de serviço. Validar entrada por schema, devolver a saída. | Montar consulta, conter regra de negócio, usar `try/except` para erro de domínio |
 | **Serviço** | `app/service/` (o pipeline de telemetria em `service/telemetry/`) | Regra de negócio, validação semântica, ownership, controle de transação. O CRUD segue o `BaseService`; o pipeline depende só de portas (`domain/ports.py`) e recebe os adaptadores pelo construtor. | Tocar no ORM direto, saber o que é HTTP (status, header, request). O pipeline, além disso, importar infraestrutura ou adaptador |
 | **Repositório** | `app/repository/` (uma subpasta por tecnologia: `sql/` e `mongo/`) | Única camada que lê e grava dados: o SQL mora em `repository/sql/`, o bronze em `repository/mongo/`. Traduz intenção em consulta. Os adaptadores do Mongo implementam portas do pipeline (`BronzeWriter`, `BronzeReader`) e são os únicos que conhecem o layout do documento. | Conter regra de negócio ou decidir permissão; uma subpasta importar a tecnologia da outra |
-| **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `metric.py`, `ports.py`, `contracts/`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
+| **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `metric.py`, `moment.py`, `ports.py`, `contracts/`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
 | **Schema** | `app/schemas/` | Único contrato de entrada e saída da API. Valida e serializa. | Acessar banco |
 
 O primeiro nível de pasta é o papel (a camada). O segundo nível é a tecnologia e só existe
@@ -155,7 +155,7 @@ Duas regras que valem a pena memorizar:
    serviço. Se você sentir essa necessidade, a lógica está na camada errada.
 
 As **folhas do domínio** (`domain/authz.py`, `domain/vin.py`, `domain/metric.py`,
-`domain/ports.py`, `domain/contracts/`) são a exceção
+`domain/moment.py`, `domain/ports.py`, `domain/contracts/`) são a exceção
 prevista pela regra 1: como só importam outras folhas, qualquer camada pode importá-las
 sem criar ciclo nem acoplar duas camadas uma à outra. É o que permite rota, serviço,
 modelo e schema falarem do mesmo vocabulário de permissões.
@@ -384,6 +384,7 @@ app/
                              (ANY_OWNER) (folha)
     vin.py                   formato e forma canônica do VIN (folha)
     metric.py                a regra do nome de uma métrica (folha)
+    moment.py                a data que cabe em UTC, para ir ao bronze (folha)
     ports.py                 portas do pipeline: Protocol e os tipos que trocam (folha)
     contracts/
       telemetry_batch.py     contrato da fila v1: envelope, encode/decode e o endereço (folha)

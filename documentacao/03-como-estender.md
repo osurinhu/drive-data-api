@@ -17,6 +17,7 @@ repositório, serviço, schemas, rota e testes.
 | Restringir uma rota, ou criar permissão/papel | [10](#10-autorização) |
 | Mudar a mensagem que atravessa a fila | [11](#11-contrato-da-fila) |
 | Um metadado novo no documento do bronze, um filtro da silver ou um índice | [12](#12-bronze) |
+| Um processo novo no bronze ou na fila, ou uma operação nova num adaptador deles | [12.4](#124-processo-novo-no-bronze-ou-na-fila) |
 | Um sub-recurso que herda a posse de outro (os motoristas do veículo) | [13](#13-sub-recurso) |
 | Uma métrica ou um evento de log novo no pipeline | [14](#14-métrica-ou-evento-novo) |
 
@@ -234,6 +235,7 @@ Três coisas a notar:
   métodos que exigem mais acrescentam o seu `@permission_required`.
 - Não há `try/except`: o serviço levanta exceção de domínio e o handler central traduz.
 - `@error_responses(blp, 403, 409)` documenta as respostas de erro no OpenAPI em uma linha.
+- O nome e a `description` do `Blueprint` viram o grupo da rota no Swagger.
 
 Para o recurso de um registro só (`/product/<int:product_id>`), copie `VehicleResource` de
 `app/blueprint/restapi/v1/vehicle.py`. Atenção à ordem dos parâmetros: o payload do
@@ -947,6 +949,8 @@ E confira:
 - [ ] O consumer só confirma a mensagem (`basic_ack`) depois da gravação confirmada. Falha
       transitória volta com `nack`, bug com `reject` com requeue, e só a mensagem fora do
       contrato vai direto para a DLQ (02-decisoes, "O destino de cada mensagem").
+- [ ] Processo ou operação nova no bronze ou na fila usa um usuário com o mínimo necessário, e
+      o adaptador foi testado só com aquela credencial (receita 12.4).
 - [ ] Teste cobrindo acesso de outro usuário (deve ser **404**) e, se a rota exige uma
       permissão que algum papel não tem, acesso sem ela em cada operação (deve ser **403** —
       `login(role=Role.SILVER)` na criação; nas escritas sobre registro existente, rebaixe o

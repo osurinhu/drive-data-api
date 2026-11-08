@@ -1,5 +1,7 @@
 """Autenticação: login e identidade. A renovação fica em `test_refresh.py`."""
 
+import logging
+
 import jwt
 
 from domain.authz import ROLE_PERMISSIONS, Role
@@ -18,6 +20,23 @@ def test_token_com_credenciais_validas(client, make_user):
     assert body["access_token"]
     assert body["refresh_token"]
     assert body["expires_in"] > 0
+
+
+def test_json_aninhado_demais_responde_400_e_deixa_aviso_no_log(client, caplog):
+    """O ``json.loads`` estoura a pilha: sem tratamento, a rota pública daria 500."""
+    with caplog.at_level(logging.WARNING):
+        response = client.post(
+            "/api/v1/auth/token",
+            data="[" * 200_000,
+            content_type="application/json",
+            headers={"X-Request-ID": "req-json-fundo"},
+        )
+
+    assert response.status_code == 400
+    assert response.get_json()["request_id"] == "req-json-fundo"
+    aviso = next(r for r in caplog.records if "aninhado demais" in r.getMessage())
+    assert aviso.levelno == logging.WARNING
+    assert "req-json-fundo" in aviso.getMessage()
 
 
 def test_token_com_senha_errada_retorna_401(client, make_user):

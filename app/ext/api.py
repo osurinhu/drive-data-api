@@ -1,7 +1,7 @@
-"""Camada de API: instância do flask-smorest e blueprint versionado."""
+"""Camada de API: instância do flask-smorest e prefixo da versão."""
 
 from flask import Flask
-from flask_smorest import Api, Blueprint
+from flask_smorest import Api
 
 from ext.config import load_routes
 
@@ -15,9 +15,9 @@ PUBLIC: list = []
 
 api = Api(spec_kwargs={"security": [{SECURITY_SCHEME: []}]})
 
-# Blueprint pai: concentra o prefixo de versão. Os módulos de rota são
-# registrados como filhos dele (ver ext.config.load_routes).
-v1 = Blueprint("v1", __name__, url_prefix="/api/v1")
+#: O prefixo de versão: os módulos de ``API_V1_ROUTES`` são servidos abaixo dele
+#: (ver ``ext.config.load_routes``).
+V1_URL_PREFIX = "/api/v1"
 
 
 def init_app(app: Flask) -> None:
@@ -30,4 +30,4 @@ def init_app(app: Flask) -> None:
         {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
     )
 
-    load_routes(app, api, v1, "API_V1_ROUTES")
+    load_routes(app, api, V1_URL_PREFIX, "API_V1_ROUTES")

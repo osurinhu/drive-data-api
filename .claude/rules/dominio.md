@@ -8,7 +8,7 @@ paths:
 O pacote tem duas partes (02-decisoes, "Na raiz de `app/`, só o `app.py`").
 
 - **O ORM** (`base.py`, `models.py`): regras em `rules/modelos-e-migracoes.md`.
-- **O vocabulário** (todo o resto: `authz.py`, `vin.py`, `metric.py`, `ports.py`, `contracts/`, este com
+- **O vocabulário** (todo o resto: `authz.py`, `vin.py`, `metric.py`, `moment.py`, `ports.py`, `contracts/`, este com
   regra própria em `rules/contratos.md`): folhas que qualquer
   camada e qualquer processo importa. Uma folha só importa a stdlib, o marshmallow e outras
   folhas. É uma lista de permitidos: nem o ORM, nem outra camada, nem biblioteca nenhuma além

@@ -12,7 +12,7 @@ Molde: `app/blueprint/restapi/v1/vehicle.py`. Receitas: 03-como-estender §1.8, 
 - Um módulo por recurso, expondo `blp = Blueprint(...)`, ativado por uma linha em
   `API_V1_ROUTES` do `[default]` **e** outra no perfil do processo que serve a rota (`[api]`
   para as de negócio; 03-como-estender §1.9). O container só faz o *wiring* de `Provide[...]`
-  neste pacote.
+  neste pacote. O `name` e a `description` do blueprint viram o grupo no Swagger.
 - Classe base do recurso com o **piso**: `decorators = [permission_required(Permission.X_LER)]`
   e `@inject` no `__init__` com `Provide[Container.x_service]`. Método sem decorator herda o piso:
   fica fechado para quem não lê — mas o piso é de leitura.

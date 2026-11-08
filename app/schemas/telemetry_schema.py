@@ -12,7 +12,7 @@ como veio: ver ``_guardavel``.
 """
 
 import math
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from marshmallow import (
@@ -26,6 +26,7 @@ from marshmallow import (
 )
 
 from domain.metric import INVALID_METRIC_MESSAGE, is_valid_metric
+from domain.moment import INVALID_MOMENT_MESSAGE, fits_in_utc
 from domain.vin import INVALID_VIN_MESSAGE, is_valid_vin
 
 #: Os limites do lote. Cerca de 8 minutos de leituras a 1 Hz por lote; são valores
@@ -76,12 +77,8 @@ def _metrica_valida(value: str) -> None:
 
 
 def _data_que_cabe_em_utc(value: datetime) -> None:
-    # Nos extremos do calendário, o fuso leva a data para fora do que o Python representa,
-    # e a gravação no bronze quebraria.
-    try:
-        value.astimezone(UTC)
-    except OverflowError as error:
-        raise ValidationError("Data fora do intervalo aceito.") from error
+    if not fits_in_utc(value):
+        raise ValidationError(INVALID_MOMENT_MESSAGE)
 
 
 def _utf8(texto: str) -> bool:

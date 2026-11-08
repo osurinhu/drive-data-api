@@ -184,6 +184,22 @@ def test_sem_token_responde_401(client):
             "collected_from",
             id="período invertido",
         ),
+        # O fuso leva a data para fora do calendário, e o BSON não a codifica.
+        pytest.param(
+            {"ingested_from": "0001-01-01T00:00:00+14:00"},
+            "ingested_from",
+            id="gravação antes do calendário",
+        ),
+        pytest.param(
+            {"collected_from": "0001-01-01T00:00:00+14:00"},
+            "collected_from",
+            id="coleta antes do calendário",
+        ),
+        pytest.param(
+            {"collected_to": "9999-12-31T23:59:59-14:00"},
+            "collected_to",
+            id="coleta depois do calendário",
+        ),
     ],
 )
 def test_query_fora_do_contrato_responde_422(client, silver, bronze, parametros, campo):
