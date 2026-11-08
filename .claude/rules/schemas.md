@@ -7,10 +7,10 @@ paths:
 
 Único contrato de entrada e saída da API. **Não pode:** acessar banco nem importar outras
 camadas; pode importar outros módulos de `schemas` e as folhas do domínio (`domain.authz`, como
-faz `auth_schema.py`, e `domain.vin`), nunca o ORM (`domain.models`). Molde: `app/schemas/item_schema.py`. Receitas: 03-como-estender §1.5 e §6.
+faz `auth_schema.py`, e `domain.vin`), nunca o ORM (`domain.models`). Molde: `app/schemas/vehicle_schema.py`. Receitas: 03-como-estender §1.5 e §6.
 
 - Cinco schemas por entidade: `XSchema` (saída), `XCreateSchema` (POST), `XUpdateSchema` (PATCH,
-  tudo opcional, **com** o `@validates_schema` "Informe ao menos um campo" do `ItemUpdateSchema`),
+  tudo opcional, **com** o `@validates_schema` "Informe ao menos um campo" do `VehicleUpdateSchema`),
   `XQuerySchema` (herda `PaginationQuerySchema`) e `XPageSchema` (herda `PageSchema` e declara
   `items`).
 - Limites como constantes do módulo (`NOME = validate.Length(min=1, max=100)`), usadas na

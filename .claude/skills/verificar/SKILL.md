@@ -19,7 +19,7 @@ Sem argumento, o modo é `tudo`.
 |---|---|---|
 | `tudo` | ruff check, ruff format --check, mypy, migrações, pytest | antes de concluir qualquer tarefa (~1 min) |
 | `estatico` | ruff check, ruff format --check, mypy | mexeu em código e não precisa de banco |
-| `testes [args]` | só o pytest, com os argumentos repassados | ciclo curto: `testes tests/test_item.py -k conflito` |
+| `testes [args]` | só o pytest, com os argumentos repassados | ciclo curto: `testes tests/test_vehicle.py -k vin` |
 | `migracoes` | upgrade head → check → downgrade base num banco descartável | criou ou editou migração |
 | `medir [args]` | só `tests/test_zz_medir.py`, com a saída inteira mesmo quando passa | medição de consultas do `/medir-consultas` |
 

@@ -141,6 +141,29 @@ def test_listagem_usa_o_envelope_de_paginacao(client, headers):
     assert body["has_next"] is True
 
 
+def test_segunda_pagina(client, headers):
+    for vin in (VIN, OUTRO_VIN, "1HGCM82633A004352"):
+        _cadastrar(client, headers, vin=vin)
+
+    body = client.get(f"{VEHICLE_URL}?page=2&per_page=2", headers=headers).get_json()
+
+    assert len(body["items"]) == 1
+    assert (body["current_page"], body["has_prev"], body["has_next"]) == (2, True, False)
+
+
+def test_filtro_vazio_nao_restringe_a_listagem(client, headers):
+    _cadastrar(client, headers, vin=VIN)
+    _cadastrar(client, headers, vin=OUTRO_VIN)
+
+    body = client.get(f"{VEHICLE_URL}?vin=", headers=headers).get_json()
+
+    assert body["total_of_items"] == 2
+
+
+def test_per_page_acima_do_maximo_retorna_422(client, headers):
+    assert client.get(f"{VEHICLE_URL}?per_page=101", headers=headers).status_code == 422
+
+
 def test_filtro_por_vin_e_parcial_e_ignora_caixa(client, headers):
     _cadastrar(client, headers, vin=VIN)
     _cadastrar(client, headers, vin=OUTRO_VIN)

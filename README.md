@@ -70,10 +70,12 @@ Crie o primeiro usuário e experimente:
 docker compose exec api flask create-user --name admin --password sua-senha-aqui --role admin
 ```
 
-Os papéis são `leitor` (só leitura), `usuario`, `gerente`, `admin` e `silver` (a conta de
-sistema da camada silver: só lê o bronze, e só a CLI a cria); o padrão é `usuario`.
-Para trocar o papel de alguém depois: `flask set-role --name admin --role gerente` (vale na
-requisição seguinte, mesmo com o token já emitido).
+Os papéis são `usuario`, `admin` (o `usuario` mais os veículos de todos) e `silver` (a conta de
+sistema da camada silver: só lê o bronze, e só a CLI a cria); o padrão é `usuario`, e é o que o
+cadastro público cria. Para trocar o papel de alguém depois: `flask set-role --name joao --role
+admin` (vale na requisição seguinte, mesmo com o token já emitido). Para trocar uma senha:
+`flask set-password --name joao`, que pede a senha nova (a opção `--password` ficaria no histórico
+do shell) e encerra todas as sessões da conta.
 
 - **Swagger UI:** http://localhost:5000/api/v1/ (e http://localhost:5001/api/v1/, o `bronze-api`)
 - **Especificação OpenAPI:** http://localhost:5000/api/v1/openapi.json
@@ -89,13 +91,24 @@ requisição seguinte, mesmo com o token já emitido).
 | `setup` (job) | `setup` | — | Postgres, RabbitMQ (API de gerenciamento), Mongo | termina depois de migrar e aplicar a topologia e os índices |
 
 ```bash
-# obter um token
+# criar uma conta (público; nasce com o papel usuario)
+curl -X POST http://localhost:5000/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"ana","password":"outra-senha-aqui"}'
+
+# obter o par de tokens: access_token (15 min) e refresh_token (30 dias)
 curl -X POST http://localhost:5000/api/v1/auth/token \
   -H 'Content-Type: application/json' \
   -d '{"name":"admin","password":"sua-senha-aqui"}'
 
-# usar o token
-curl http://localhost:5000/api/v1/item/ -H "Authorization: Bearer <token>"
+# usar o token de acesso
+curl http://localhost:5000/api/v1/vehicle/ -H "Authorization: Bearer <token>"
+
+# o token de acesso expirou: trocar o de renovação por um par novo
+curl -X POST http://localhost:5000/api/v1/auth/refresh -H "Authorization: Bearer <refresh_token>"
+
+# encerrar a sessão (204)
+curl -X POST http://localhost:5000/api/v1/auth/logout -H "Authorization: Bearer <refresh_token>"
 
 # cadastrar um veículo e enviar um lote de leituras dele (202: o lote está na fila)
 curl -X POST http://localhost:5000/api/v1/vehicle/ -H "Authorization: Bearer <token>" \
@@ -133,8 +146,10 @@ fica em 0. Uma mensagem na DLQ estava fora do contrato ou falhou mais que
 (`docker compose stop consumer`), o `api` continua respondendo 202 e a fila acumula; quando ele
 volta (`docker compose start consumer`), ela é drenada, sem duplicar nada.
 
-A camada silver lê o bronze pelo `bronze-api` (porta 5001), com uma conta de papel `silver`,
-que só a CLI cria:
+A camada silver lê o bronze pelo `bronze-api` (porta 5001), com uma conta de sistema de papel
+`silver`, que só um operador cria, pela CLI. A senha é um segredo de pelo menos 32 caracteres,
+gerado por `python -c "import secrets; print(secrets.token_urlsafe(32))"` e guardado no cofre
+da silver. Para trocá-lo: `flask set-password --name silver-etl`.
 
 ```bash
 docker compose exec api flask create-user --name silver-etl --role silver   # pede a senha
@@ -325,12 +340,12 @@ workers herdariam os mesmos sockets do pool e corromperiam a comunicação com o
 ## Segurança e observabilidade — o essencial
 
 Autenticação é exigida **por padrão**: o requisito é global no spec OpenAPI e aplicado por
-classe de rota. Rotas públicas abrem mão explicitamente. Hoje só `/auth/token`, `/health/` e
-`/health/live` são públicas — e é `ROTAS_PUBLICAS`, em `tests/test_contracts.py`, que guarda essa lista: o
+classe de rota. Rotas públicas abrem mão explicitamente. Hoje só `/auth/token`, `/auth/register`,
+`/health/` e `/health/live` são públicas — e é `ROTAS_PUBLICAS`, em `tests/test_contracts.py`, que guarda essa lista: o
 CI compara com o que o spec declara aberto, então nenhuma rota fica pública por descuido.
 
 Autorização é por **permissão**, não por papel: cada rota declara a capacidade que exige
-(`permission_required(Permission.ITEM_ESCREVER)`), e os papéis são pacotes de permissões
+(`permission_required(Permission.VEICULO_ESCREVER)`), e os papéis são pacotes de permissões
 definidos em `app/domain/authz.py`. Falta de permissão para a operação responde **403**; recurso
 que existe mas é de outro dono responde **404**. O papel é lido do banco a cada
 requisição, então promover ou rebaixar alguém vale na hora, sem esperar o token expirar.
@@ -342,7 +357,7 @@ aconteceu:
 
 ```bash
 docker compose logs api | grep <request_id>
-# 172.19.0.1 "GET /api/v1/item/ HTTP/1.1" 401 106 3187us req=<request_id>
+# 172.19.0.1 "GET /api/v1/vehicle/ HTTP/1.1" 401 106 3187us req=<request_id>
 ```
 
 Detalhes e o raciocínio por trás:
@@ -353,6 +368,9 @@ Detalhes e o raciocínio por trás:
 ## Antes de ir para produção
 
 - [ ] Trocar todos os segredos do `.env` e nunca reutilizar os de desenvolvimento.
+- [ ] Antes de aplicar a migração 0006, conferir as contas que mudam de papel:
+      `SELECT name, role FROM users WHERE role IN ('leitor', 'gerente')`. Elas viram `usuario`:
+      o `leitor` passa a escrever nos próprios veículos e o `gerente` deixa de ler os de todos.
 - [ ] Restringir `CORS_ORIGINS` no `settings.toml` para os domínios do seu frontend
       (o padrão é `["*"]`, adequado só para desenvolvimento).
 - [ ] Remover do `docker-compose.yml` as conveniências de desenvolvimento: o mapeamento das
@@ -366,7 +384,8 @@ Detalhes e o raciocínio por trás:
 - [ ] Trocar o Mongo e o RabbitMQ de nó único por replica set e cluster.
 - [ ] Conferir que o build de produção usa `target: runtime` — o estágio `dev` carrega as
       ferramentas de teste e não deve ir para produção.
-- [ ] Rever `JWT_ACCESS_TOKEN_EXPIRES` (padrão: 1 hora) e considerar refresh tokens.
+- [ ] Rever `JWT_ACCESS_TOKEN_EXPIRES` (padrão: 15 min) e `JWT_REFRESH_TOKEN_EXPIRES` (30 dias),
+      e agendar o `flask prune-tokens`, que apaga da tabela os tokens de renovação expirados.
 - [ ] Revisar `ROLE_PERMISSIONS` em `app/domain/authz.py` — os papéis que acompanham a base são um
       ponto de partida, não um modelo de permissões pronto — e conferir quem está como
       `admin`: `flask shell` ou `SELECT name, role FROM users WHERE role <> 'usuario';`.
@@ -379,5 +398,3 @@ Detalhes e o raciocínio por trás:
       AMQP e faz ping no Mongo), o que pode prender um worker por até
       `HEALTH_PROBE_TIMEOUT_SECONDS` por sonda. O `/health/live` não tem esse custo.
 - [ ] Colocar um proxy reverso com TLS na frente, repassando o `X-Request-ID`.
-- [ ] Remover a entidade `Item`, seus schemas, testes e a migração inicial depois que suas
-      entidades estiverem no lugar.

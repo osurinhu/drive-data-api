@@ -58,7 +58,7 @@ grafo do lado HTTP.
 | Perfil | Quem roda | Dependências | Rotas |
 |---|---|---|---|
 | `[default]` (sem `FLASK_PROCESS`) | desenvolvimento local e a suíte de testes | todas: é a união dos perfis | todas |
-| `[api]` | serviço `api` do compose: login, as rotas de negócio e o recebimento dos lotes de telemetria, que ele publica na fila | Postgres e RabbitMQ | `health`, `auth`, `item`, `vehicle`, `vehicle_driver`, `telemetry` |
+| `[api]` | serviço `api` do compose: cadastro, login, as rotas de negócio e o recebimento dos lotes de telemetria, que ele publica na fila | Postgres e RabbitMQ | `health`, `auth`, `registration`, `vehicle`, `vehicle_driver`, `telemetry` |
 | `[bronze_api]` | serviço `bronze-api`: a API da camada silver, que faz login e lê o bronze por cursor (`GET /bronze/records`) | Postgres e Mongo | `health`, `auth`, `bronze` |
 | `[consumer]` | serviço `consumer` do compose (`flask consumer run`): consome a fila `bronze.telemetry` e grava cada registro no bronze | Mongo e RabbitMQ (sem Postgres e sem JWT) | nenhuma |
 | `[setup]` | o job `setup`: migra, aplica a topologia do RabbitMQ e os índices do bronze e termina, antes dos outros processos subirem | Postgres, pelo Alembic, que lê a configuração sem montar a aplicação; RabbitMQ, pela API de gerenciamento (`flask rabbitmq setup`); Mongo (`flask mongo setup`) | nenhuma |
@@ -200,8 +200,8 @@ Quase todo o CRUD já está escrito. Uma entidade nova herda:
 | `BaseRepository[T]` | `app/repository/sql/base_repository.py` | `get_by_id`, `get_by_filter`, `get_first_by_filter`, `get_page`, `add`, `update`, `soft_delete`, `commit`, `rollback` |
 | `BaseService[T]` | `app/service/base_service.py` | CRUD completo, ownership, exclusão lógica, transação, os ganchos `before_create` / `before_update` / `before_delete` e o `_clean_text` que eles usam para normalizar texto |
 
-O parâmetro de tipo (`BaseRepository[Item]`) é o que faz o type checker saber que
-`get_by_id()` devolve `Item | None`, e não `BaseModel | None`.
+O parâmetro de tipo (`BaseRepository[Vehicle]`) é o que faz o type checker saber que
+`get_by_id()` devolve `Vehicle | None`, e não `BaseModel | None`.
 
 ---
 
@@ -209,52 +209,45 @@ O parâmetro de tipo (`BaseRepository[Item]`) é o que faz o type checker saber 
 
 ### Autorização
 
-Uma **permissão** é uma capacidade (`item:escrever`). Um **papel** é um pacote nomeado de
+Uma **permissão** é uma capacidade (`veiculo:escrever`). Um **papel** é um pacote nomeado de
 permissões, e é o papel que fica gravado em `users.role`. Os dois ficam em `app/domain/authz.py`,
 junto do mapa entre eles:
 
 ```python
 #: Cada papel parte do anterior, para que a hierarquia esteja escrita no código.
-_LEITOR  = frozenset({ITEM_LER})
-_USUARIO = _LEITOR  | {ITEM_ESCREVER, VEICULO_LER, VEICULO_ESCREVER, TELEMETRIA_ENVIAR}
-_GERENTE = _USUARIO | {ITEM_LER_DE_TODOS}
-_ADMIN   = _GERENTE | {ITEM_ESCREVER_DE_TODOS, VEICULO_LER_DE_TODOS, VEICULO_ESCREVER_DE_TODOS}
+_USUARIO = frozenset({VEICULO_LER, VEICULO_ESCREVER, TELEMETRIA_ENVIAR})
+_ADMIN   = _USUARIO | {VEICULO_LER_DE_TODOS, VEICULO_ESCREVER_DE_TODOS}
 
 #: Ramo à parte: a conta de sistema da camada silver só lê o bronze.
 _SILVER  = frozenset({BRONZE_LER, BRONZE_LER_DE_TODOS})
 
 ROLE_PERMISSIONS = {
-    Role.LEITOR: _LEITOR,
     Role.USUARIO: _USUARIO,
-    Role.GERENTE: _GERENTE,
     Role.ADMIN: _ADMIN,
     Role.SILVER: _SILVER,
 }
 ```
 
-São cinco papéis. Os quatro da hierarquia vão do somente-leitura ao administrador; o
-quinto, `silver`, fica fora dela: não tem nenhuma permissão dos outros, e nenhum deles,
-nem o `admin`, lê o bronze. O
-`leitor` existe por um motivo prático: sem um papel sem permissão de escrita, a resposta
-**403** só seria alcançável remendando o mapa dentro do teste, e a configuração que
-acompanha a base não demonstraria o próprio caminho de negação.
+São três papéis. O `usuario` é o que o cadastro público cria, e o `admin` soma a ele os
+escopos sobre os veículos de todos; o terceiro, `silver`, fica fora da hierarquia: não tem
+nenhuma permissão dos outros, e nenhum deles, nem o `admin`, lê o bronze. Papel só muda pela
+CLI: não existe caminho HTTP para escalar privilégio.
 
 A rota declara a **permissão** que exige, nunca o papel:
 
 ```python
-class ItemView(MethodView):
-    decorators = [permission_required(Permission.ITEM_LER)]   # piso do recurso
+class VehicleView(MethodView):
+    decorators = [permission_required(Permission.VEICULO_LER)]   # piso do recurso
 
-    @permission_required(Permission.ITEM_ESCREVER)            # o método exige mais
+    @permission_required(Permission.VEICULO_ESCREVER)            # o método exige mais
     def post(self, payload): ...
 ```
 
 Três consequências que valem o espaço:
 
-* **A hierarquia é inclusão de conjuntos, não um número.** `ADMIN` contém `GERENTE`, que
-  contém `USUARIO`, que contém `LEITOR`; o `SILVER` é disjunto de todos. Nenhum peso arbitrário para justificar, e "o
-  gerente vê tudo mas altera só o que é dele" é expressável — o que um nível ordenado não
-  permitiria.
+* **A hierarquia é inclusão de conjuntos, não um número.** `ADMIN` contém `USUARIO`; o
+  `SILVER` é disjunto dos dois. Nenhum peso arbitrário para justificar, e "vê tudo mas altera
+  só o que é dele" é expressável — o que um nível ordenado não permitiria.
 * **O papel mora só no banco.** Não há claim equivalente no token: a autorização lê
   `current_user.role`, da linha que o `user_lookup_loader` já carregou. Trocar o papel vale
   na requisição seguinte, com o mesmo token.
@@ -270,7 +263,7 @@ Entidades marcadas com `owned=True` pertencem a um usuário. O **escopo de dono*
 parâmetro de cada método do serviço, não do construtor — e **não tem valor padrão**:
 
 ```python
-service.get_by_id(item_id, current_owner_scope(Permission.ITEM_LER_DE_TODOS))
+service.get_by_id(vehicle_id, current_owner_scope(Permission.VEICULO_LER_DE_TODOS))
 ```
 
 `current_owner_scope(permissão)` (em `app/ext/auth.py`) devolve o id do usuário logado, ou
@@ -279,8 +272,8 @@ informada. É o
 **único** lugar onde o filtro de posse é dispensado, e a permissão vem explícita no ponto
 de chamada para que a rota diga *de quem* ela opera sem precisar abrir o `auth.py`.
 
-Ler e escrever têm permissões de escopo separadas (`ITEM_LER_DE_TODOS`,
-`ITEM_ESCREVER_DE_TODOS`), que é o que permite o papel que enxerga tudo e altera só o
+Ler e escrever têm permissões de escopo separadas (`VEICULO_LER_DE_TODOS`,
+`VEICULO_ESCREVER_DE_TODOS`), que é o que permite o papel que enxerga tudo e altera só o
 próprio.
 
 | Situação | Resposta |
@@ -312,7 +305,7 @@ Toda resposta de erro tem o mesmo formato, com o `request_id` que também aparec
 
 ```json
 { "code": 404, "status": "Not Found",
-  "message": "Item não encontrado.", "request_id": "a3f1c9..." }
+  "message": "Veículo não encontrado.", "request_id": "a3f1c9..." }
 ```
 
 A exceção é o 422 de validação: quem o monta é o próprio flask-smorest, que acrescenta
@@ -328,6 +321,10 @@ que qualquer autenticado acessa usa `authenticated` — o `permission_required()
 argumentos, nomeado em `app/ext/auth.py`. Rotas públicas abrem mão explicitamente com
 `@blp.doc(security=PUBLIC)`.
 
+Renovar e encerrar a sessão aceitam só o token de renovação: `refresh_token_required`, em
+`app/ext/auth.py`, confere a assinatura, a validade e o usuário, e o `TokenService` decide o
+que o token ainda vale, na mesma transação da troca. Nas demais rotas, ele é recusado.
+
 A direção é deliberada: **esquecer a anotação fecha a rota, não abre** — um método novo
 sem decorator herda o piso da classe. E esquecer de declarar a permissão reprova em
 `tests/test_contracts.py`, que varre as rotas registradas atrás de operação protegida sem
@@ -336,7 +333,7 @@ abrir uma rota exige acrescentá-la ali, então abrir sem querer também reprova
 
 O limite dessas redes: o piso é de **leitura**. Um método de escrita que esquece o seu
 `@permission_required` herda só o piso — fica aberto a quem apenas lê — e o contrato não
-percebe, porque aceita o piso como declaração. Quem pega é o teste de 403 com o `leitor` em
+percebe, porque aceita o piso como declaração. Quem pega é o teste do papel que só lê em
 cada operação de escrita (receita 1.10 de `03-como-estender.md`).
 
 ---
@@ -372,7 +369,7 @@ app/
     commands.py              comandos `flask ...`
   domain/                    o ORM (base, models) e as folhas (o resto)
     base.py                  BaseModel (campos de controle, convenção de nomes)
-    models.py                User, Item, Vehicle, VehicleDriver
+    models.py                User, Vehicle, VehicleDriver, RefreshToken
     authz.py                 papéis, permissões, o mapa entre eles e o escopo de dono
                              (ANY_OWNER) (folha)
     vin.py                   formato e forma canônica do VIN (folha)
@@ -383,7 +380,7 @@ app/
     sql/                     SQLAlchemy: a única parte que monta consulta SQL
       base_repository.py     CRUD genérico
       user_repository.py     uma linha: amarra o modelo
-      item_repository.py
+      refresh_token_repository.py  a família de tokens: trava a linha na troca e revoga em massa
       vehicle_repository.py  + authorized_vins: a posse para o envio, de gestor ou de
                              motorista (uma consulta por lote)
       vehicle_driver_repository.py  os vínculos de motorista (joinedload das três relações);
@@ -401,8 +398,8 @@ app/
     errors.py                exceções de domínio
     pagination.py            dataclasses Page (por número de página) e CursorPage (por cursor)
     auth_service.py          verificação de credenciais
-    user_service.py
-    item_service.py
+    user_service.py          cadastro, papel e troca de senha (que encerra as sessões)
+    token_service.py         token de renovação: registro, rotação e revogação da família
     vehicle_service.py       VIN na forma canônica e imutável; a exclusão desliga os motoristas
     vehicle_driver_service.py  motoristas: a posse herdada do veículo e a visão do motorista
     telemetry/               o pipeline: só portas e folhas, sem BaseService
@@ -415,8 +412,7 @@ app/
     pagination_schema.py     parâmetros e envelope de paginação
     error_schema.py          envelope de erro (documentação)
     health_schema.py
-    auth_schema.py
-    item_schema.py
+    auth_schema.py           login, cadastro, o par de tokens e o usuário
     vehicle_schema.py
     vehicle_driver_schema.py o motorista visto pelo gestor, e o veículo visto pelo motorista
     telemetry_schema.py      o lote do app e o recibo 202
@@ -425,8 +421,8 @@ app/
     http_errors.py           envelope de erro + mapa exceção → HTTP
   blueprint/restapi/v1/
     health.py                prontidão por dependência e vida (/health/live), públicas
-    auth.py                  token e identidade
-    item.py                  CRUD da entidade de exemplo
+    auth.py                  o par de tokens (login, renovação, logout) e a identidade
+    registration.py          POST /auth/register: o cadastro público, só no processo api
     vehicle.py               cadastro de veículos (quem cadastra é o gestor)
     vehicle_driver.py        /vehicle/<id>/drivers e /vehicle/driving: os motoristas
     telemetry.py             POST /telemetry/batches: o lote do app, a caminho da fila

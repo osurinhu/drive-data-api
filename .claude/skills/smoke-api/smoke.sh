@@ -32,8 +32,9 @@ Uso (a partir da raiz do repositório):
   bash .claude/skills/smoke-api/smoke.sh
 
 Sobe o código atual num container avulso do `api`, com banco descartável, e
-confere por HTTP: health (com o perfil api: banco e RabbitMQ), OpenAPI, login,
-CRUD de item e de veículo, os motoristas, o envio de lote de telemetria (202 e a mensagem na fila),
+confere por HTTP: health (com o perfil api: banco e RabbitMQ), OpenAPI, cadastro, login,
+renovação e logout, CRUD de veículo, os motoristas, o envio de lote de telemetria (202 e a
+mensagem na fila),
 a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log
 de acesso.
 
@@ -154,15 +155,17 @@ echo ">> no ar em $(($(date +%s) - inicio)) s, em $base"
 
 senha="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
 if ! docker exec -e SMOKE_SENHA="$senha" "$container" sh -c '
-  for papel in leitor usuario gerente admin silver; do
+  for papel in usuario admin silver; do
     flask create-user --name "smoke-$papel" --password "$SMOKE_SENHA" --role "$papel" || exit 1
-  done' >"$tmp/usuarios.log" 2>&1; then
+  done
+  flask create-user --name smoke-motorista --password "$SMOKE_SENHA" --role usuario
+' >"$tmp/usuarios.log" 2>&1; then
   echo "FALHOU  flask create-user:"
   tail -n 20 "$tmp/usuarios.log" | sed 's/^/        /'
   echo "RESULTADO: FALHOU — flask create-user"
   exit 1
 fi
-echo ">> flask create-user: smoke-leitor, smoke-usuario, smoke-gerente, smoke-admin e smoke-silver"
+echo ">> flask create-user: smoke-usuario, smoke-motorista, smoke-admin e smoke-silver"
 
 # --- Matriz ---------------------------------------------------------------------
 
@@ -227,31 +230,36 @@ fi
 
 confere 200 "liveness, público" GET /health/live
 confere 200 "spec OpenAPI, público" GET /openapi.json
-confere 401 "sem token" GET /item/
+confere 401 "sem token" GET /vehicle/
 confere 401 "senha errada" POST /auth/token "" '{"name":"smoke-usuario","password":"errada"}'
 
-for papel in leitor usuario gerente admin silver; do
+for papel in usuario motorista admin silver; do
   confere 200 "login de $papel" POST /auth/token "" \
     "{\"name\":\"smoke-$papel\",\"password\":\"$senha\"}"
   printf -v "token_$papel" '%s' "$(campo access_token)"
 done
 
 confere 200 "usuario: quem sou eu" GET /auth/me "$token_usuario"
-confere 201 "usuario cria" POST /item/ "$token_usuario" '{"name":"smoke"}'
-item="$(campo id)"
-item="${item:-0}"
-confere 409 "nome repetido" POST /item/ "$token_usuario" '{"name":"smoke"}'
-confere 422 "corpo inválido" POST /item/ "$token_usuario" '{"campo":"x"}'
-confere 200 "usuario lista" GET /item/ "$token_usuario"
-confere 403 "leitor não cria" POST /item/ "$token_leitor" '{"name":"do leitor"}'
-confere 403 "leitor não altera" PATCH "/item/$item" "$token_leitor" '{"name":"x"}'
-confere 403 "leitor não exclui" DELETE "/item/$item" "$token_leitor"
-confere 404 "leitor não vê o alheio" GET "/item/$item" "$token_leitor"
-confere 200 "gerente lê o alheio" GET "/item/$item" "$token_gerente"
-confere 404 "gerente não altera o alheio" PATCH "/item/$item" "$token_gerente" '{"name":"x"}'
-confere 200 "admin altera o alheio" PATCH "/item/$item" "$token_admin" '{"name":"smoke 2"}'
-confere 200 "dono exclui (lógica)" DELETE "/item/$item" "$token_usuario"
-confere 404 "excluído some" GET "/item/$item" "$token_usuario"
+
+# Cadastro público: nasce usuario, e o papel nem faz parte do contrato.
+novo="{\"name\":\"smoke-novo\",\"password\":\"$senha\"}"
+confere 201 "cadastro público" POST /auth/register "" "$novo"
+confere 409 "cadastro repetido" POST /auth/register "" "$novo"
+confere 422 "cadastro não escolhe papel" POST /auth/register "" \
+  "{\"name\":\"smoke-outro\",\"password\":\"$senha\",\"role\":\"admin\"}"
+
+# Sessão: cada token de renovação vale uma troca, e o reuso derruba a família.
+confere 200 "login da sessão" POST /auth/token "" "$novo"
+renovacao_1="$(campo refresh_token)"
+confere 401 "renovação não abre rota" GET /auth/me "$renovacao_1"
+confere 200 "renova" POST /auth/refresh "$renovacao_1"
+renovacao_2="$(campo refresh_token)"
+confere 401 "reuso do token trocado" POST /auth/refresh "$renovacao_1"
+confere 401 "reuso derruba o sucessor" POST /auth/refresh "$renovacao_2"
+confere 200 "login de outra sessão" POST /auth/token "" "$novo"
+renovacao_3="$(campo refresh_token)"
+confere 204 "logout" POST /auth/logout "$renovacao_3"
+confere 401 "renova depois do logout" POST /auth/refresh "$renovacao_3"
 
 # Veículo: o VIN é único entre todos os donos (e vale a forma canônica), a silver
 # não mexe em veículo e só o admin tem escopo sobre o alheio.
@@ -259,26 +267,31 @@ vin="93YBSR7RHEJ298116"
 confere 201 "usuario cadastra veículo" POST /vehicle/ "$token_usuario" "{\"vin\":\"$vin\"}"
 veiculo="$(campo id)"
 veiculo="${veiculo:-0}"
-confere 409 "VIN de outro gestor" POST /vehicle/ "$token_gerente" '{"vin":"93ybsr7rhej298116"}'
+confere 409 "VIN de outro gestor" POST /vehicle/ "$token_motorista" '{"vin":"93ybsr7rhej298116"}'
 confere 422 "VIN inválido" POST /vehicle/ "$token_usuario" '{"vin":"93YBSR7RHEJ29811O"}'
+confere 200 "usuario lista os veículos" GET /vehicle/ "$token_usuario"
 confere 403 "silver não cadastra" POST /vehicle/ "$token_silver" '{"vin":"9BWZZZ377VT004251"}'
-confere 404 "outro não vê o veículo" GET "/vehicle/$veiculo" "$token_gerente"
+confere 403 "silver não altera" PATCH "/vehicle/$veiculo" "$token_silver" '{"nickname":"x"}'
+confere 403 "silver não exclui" DELETE "/vehicle/$veiculo" "$token_silver"
+confere 404 "outro não vê o veículo" GET "/vehicle/$veiculo" "$token_motorista"
+confere 404 "outro não altera o veículo" PATCH "/vehicle/$veiculo" "$token_motorista" \
+  '{"nickname":"x"}'
 confere 200 "admin altera o veículo" PATCH "/vehicle/$veiculo" "$token_admin" '{"nickname":"smoke"}'
 
-# Motoristas: o gestor adiciona pelo login (o gerente, aqui, é só mais um usuário
-# que envia), o motorista não vê os outros motoristas e a silver não mexe em nada.
+# Motoristas: o gestor adiciona pelo login, o motorista não vê os outros motoristas
+# e a silver não mexe em nada.
 motoristas="/vehicle/$veiculo/drivers"
 confere 201 "gestor adiciona motorista" POST "$motoristas" "$token_usuario" \
-  '{"user_name":"smoke-gerente"}'
+  '{"user_name":"smoke-motorista"}'
 motorista="$(campo driver_id)"
 motorista="${motorista:-0}"
-confere 409 "motorista repetido" POST "$motoristas" "$token_usuario" '{"user_name":"smoke-gerente"}'
+confere 409 "motorista repetido" POST "$motoristas" "$token_usuario" '{"user_name":"smoke-motorista"}'
 confere 404 "login inexistente" POST "$motoristas" "$token_usuario" '{"user_name":"ninguem"}'
 confere 422 "gestor como motorista" POST "$motoristas" "$token_usuario" \
   '{"user_name":"smoke-usuario"}'
 confere 403 "silver não adiciona" POST "$motoristas" "$token_silver" '{"user_name":"smoke-admin"}'
-confere 404 "motorista não vê os outros" GET "$motoristas" "$token_gerente"
-confere 200 "motorista lista o que dirige" GET /vehicle/driving "$token_gerente"
+confere 404 "motorista não vê os outros" GET "$motoristas" "$token_motorista"
+confere 200 "motorista lista o que dirige" GET /vehicle/driving "$token_motorista"
 
 # Telemetria: o motorista envia um lote aceito em parte (o VIN que ele dirige vai
 # para a fila; o alheio volta no recibo), a silver não envia, o formato inválido
@@ -286,7 +299,7 @@ confere 200 "motorista lista o que dirige" GET /vehicle/driving "$token_gerente"
 leitura='"collected_at":"2026-11-07T12:00:00Z","readings":[{"metric":"rpm","unit":"rpm","available":true,"value":800.0}]'
 lote="{\"records\":[{\"id\":\"00000000-0000-4000-8000-00000000000a\",\"vin\":\"$vin\",$leitura},"
 lote+="{\"id\":\"00000000-0000-4000-8000-00000000000b\",\"vin\":\"9BWZZZ377VT004251\",$leitura}]}"
-if confere 202 "motorista envia em parte" POST /telemetry/batches "$token_gerente" "$lote"; then
+if confere 202 "motorista envia em parte" POST /telemetry/batches "$token_motorista" "$lote"; then
   total=$((total + 1))
   if [ "$(campo accepted)" = "1" ] && grep -q '"vehicle_not_authorized"' "$tmp/corpo"; then
     echo "OK      recibo: 1 aceito, o VIN alheio em rejected"
@@ -298,7 +311,7 @@ fi
 confere 403 "silver não envia" POST /telemetry/batches "$token_silver" "$lote"
 confere 422 "lote vazio" POST /telemetry/batches "$token_usuario" '{"records":[]}'
 confere 200 "gestor remove o motorista" DELETE "$motoristas/$motorista" "$token_usuario"
-if confere 202 "motorista removido envia" POST /telemetry/batches "$token_gerente" "$lote"; then
+if confere 202 "motorista removido envia" POST /telemetry/batches "$token_motorista" "$lote"; then
   total=$((total + 1))
   if [ "$(campo accepted)" = "0" ]; then
     echo "OK      recibo: nada aceito do motorista removido"

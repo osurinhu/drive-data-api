@@ -1,12 +1,9 @@
-"""Modelos da aplicação.
+"""Modelos da aplicação."""
 
-``Item`` é a entidade de exemplo: existe para demonstrar o caminho completo
-(modelo → repositório → serviço → rota → schema → teste) e pode ser removida
-ao iniciar um projeto real.
-"""
+from datetime import datetime
 
+from sqlalchemy import DateTime, ForeignKey, Index, String, text
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from domain.authz import Role
@@ -41,38 +38,12 @@ class User(BaseModel):
         ROLE_COLUMN_TYPE, default=Role.USUARIO, server_default=Role.USUARIO.value
     )
 
-    items: Mapped[list["Item"]] = relationship(back_populates="owner")
     vehicles: Mapped[list["Vehicle"]] = relationship(back_populates="owner")
     #: Os vínculos de motorista: os veículos que o usuário dirige, de outros gestores.
     driving: Mapped[list["VehicleDriver"]] = relationship(back_populates="driver")
 
     def __repr__(self) -> str:
         return f"<User id={self.id} name={self.name!r} role={self.role.value!r}>"
-
-
-class Item(BaseModel):
-    __tablename__ = "items"
-    __table_args__ = (
-        # Índice único parcial: o nome só precisa ser único entre os itens
-        # ATIVOS do mesmo dono. Sem o `WHERE`, um item excluído logicamente
-        # bloquearia para sempre a reutilização do nome.
-        Index(
-            "uq_items_owner_name_active",
-            "owner_id",
-            "name",
-            unique=True,
-            postgresql_where=text("deleted = false"),
-        ),
-    )
-
-    name: Mapped[str] = mapped_column(String(100))
-    description: Mapped[str | None] = mapped_column(String(500), default=None)
-
-    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    owner: Mapped["User"] = relationship(back_populates="items")
-
-    def __repr__(self) -> str:
-        return f"<Item id={self.id} name={self.name!r} owner_id={self.owner_id}>"
 
 
 class Vehicle(BaseModel):
@@ -136,3 +107,24 @@ class VehicleDriver(BaseModel):
         return (
             f"<VehicleDriver id={self.id} vehicle_id={self.vehicle_id} driver_id={self.driver_id}>"
         )
+
+
+class RefreshToken(BaseModel):
+    """Token de renovação emitido, identificado pelo ``jti``.
+
+    Os tokens de uma mesma sessão formam uma família, nascida no login e estendida a
+    cada renovação (``replaced_by_jti`` aponta o sucessor). Revogar é a exclusão lógica
+    (``deleted``): o repositório já deixa de enxergar o token, e a linha fica até o
+    ``flask prune-tokens`` apagar as expiradas.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    jti: Mapped[str] = mapped_column(String(36), unique=True)
+    family_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    replaced_by_jti: Mapped[str | None] = mapped_column(String(36), default=None)
+
+    def __repr__(self) -> str:
+        return f"<RefreshToken id={self.id} user_id={self.user_id} jti={self.jti!r}>"

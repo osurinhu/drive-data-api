@@ -7,7 +7,7 @@ paths:
 
 pytest contra PostgreSQL, MongoDB e RabbitMQ reais, nunca SQLite nem um Mongo ou broker em
 memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda derrubada do
-`test_health.py`. Rode com `/verificar testes <args>`. Moldes: `tests/test_item.py` (CRUD) e
+`test_health.py`. Rode com `/verificar testes <args>`. Moldes: `tests/test_vehicle.py` (CRUD) e
 `tests/test_authz.py` (papéis). Receita: 03-como-estender §1.10.
 
 - A pasta diz a infraestrutura do teste. A raiz usa Postgres e HTTP, `tests/unit/` não usa
@@ -54,12 +54,11 @@ memória. Dublê só em `tests/unit/` ou para provocar uma falha, como a sonda d
 - Parâmetro de fixture não usado reprova no ruff (`ARG001`).
 - Cobertura mínima de recurso novo: criação, listagem paginada, 409 de duplicado, 422 de entrada
   inválida, exclusão lógica sumindo das consultas, **404 para recurso de outro dono** e **403 com
-  `Role.LEITOR` em cada operação de escrita** — na criação, `login(role=Role.LEITOR)`; nas escritas
+  `Role.SILVER` em cada operação de escrita** — na criação, `login(role=Role.SILVER)`; nas escritas
   sobre registro existente (PATCH, DELETE, ações como o `arquivar` da §2), crie como `usuario`,
-  rebaixe com `set_role(nome, Role.LEITOR)` e espere 403. Ele prova que a permissão da escrita é a
-  certa; a falta do decorator o `test_contracts.py` pega. Recurso que o `leitor` nem lê (o
-  `Vehicle`) usa a `Role.SILVER`, cujo 403 sai do piso da classe: aí a escrita fica só com o
-  contrato.
+  rebaixe com `set_role(nome, Role.SILVER)` e espere 403. Esse 403 sai do piso da classe; a falta
+  do decorator o `test_contracts.py` pega, e quem prova que a permissão da escrita é a certa é o
+  teste do papel que só lê (`monkeypatch.setitem` em `ROLE_PERMISSIONS`, molde em `test_authz.py`).
 - `test_contracts.py` guarda contratos que nenhum teste funcional pegaria. Nunca o afrouxe para
   passar: corrija a causa. Só altere `ROTAS_PUBLICAS` ao abrir uma rota de propósito.
 - Sub-recurso: também o 404 do pai de outro dono em **cada** operação do filho, um vínculo de

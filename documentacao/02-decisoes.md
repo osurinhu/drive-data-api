@@ -99,8 +99,8 @@ importa é a dos imports, e ela é verificada. Também uma variável de ambiente
 desligar cada extensão: a composição ficaria espalhada entre o compose e o código, sem um lugar
 só para revisar.
 
-### Classes genéricas (`BaseRepository[Item]`)
-O type checker passa a saber que `get_by_id()` devolve `Item | None`. Isso pega camada
+### Classes genéricas (`BaseRepository[Vehicle]`)
+O type checker passa a saber que `get_by_id()` devolve `Vehicle | None`. Isso pega camada
 trocada em tempo de análise, não em produção.
 **Motivo concreto:** o mypy revelou que `BaseRepository` usava `self.model.id` sem que
 nada declarasse `id`. A chave primária foi para o `BaseModel` e a suposição implícita virou
@@ -166,12 +166,11 @@ caminho.
 **Descartado:** o modelo dos projetos de origem, que validava só na camada de serviço.
 
 ### Um VIN, um cadastro ativo, de qualquer dono
-`uq_vehicles_vin_active` é único sobre `vin` entre os veículos ativos, sem o dono na chave
-(o nome do item é único por dono).
+`uq_vehicles_vin_active` é único sobre `vin` entre os veículos ativos, sem o dono na chave.
 **Por quê:** o VIN identifica o carro, e é por ele que a posse é consultada no envio
 (`VehicleRepository.authorized_vins`). Dois cadastros ativos do mesmo VIN seriam dois
 gestores para o mesmo carro, os dois enviando dados dele.
-**Descartado:** a unicidade por dono, no molde do `Item`.
+**Descartado:** a unicidade por dono.
 **Custo aceito:** quem cadastra primeiro bloqueia o VIN (409), mesmo que o carro não seja
 dele; a disputa é resolvida pelo `admin`, que tem os escopos de veículo de todos. O 409
 revela que o VIN está cadastrado, o que não é segredo: o VIN vem gravado no próprio carro.
@@ -517,24 +516,22 @@ públicas abrem mão explicitamente.
 deixava aberta, sem nenhum aviso. Agora esquecer **fecha**.
 
 ### Permissões nomeadas, agrupadas em papéis
-Uma permissão é uma capacidade (`item:escrever`); um papel é um pacote de permissões; o
+Uma permissão é uma capacidade (`veiculo:escrever`); um papel é um pacote de permissões; o
 usuário guarda o papel. A rota declara a **permissão** que exige, nunca o papel, e o mapa
 `ROLE_PERMISSIONS` (em `app/domain/authz.py`) é a única fonte de verdade.
 **Por quê:** separa *quem pode* de *quem é*. Mudar a regra passa a ser reescrever um mapa
 de cinco linhas, e não caçar verificações espalhadas pelas rotas. A hierarquia entre papéis
 fica sendo inclusão de conjuntos, o que a torna verificável em vez de convencionada.
-**Os quatro que acompanham a base:** `leitor` (só leitura), `usuario`, `gerente` e
-`admin`. O `leitor` não é enfeite: sem um papel sem permissão de escrita, o **403** só
-seria alcançável remendando o mapa dentro do teste, e a configuração que a base entrega
-não demonstraria o próprio caminho de negação.
+**Os três papéis:** `usuario`, `admin` e `silver`. Os dois primeiros formam a hierarquia, e a
+`silver` é um ramo à parte (abaixo). O 403 de quem só lê, que nenhum papel de hoje produz, é
+provado num teste que restringe o mapa (`test_quem_so_le_o_veiculo_nao_escreve_nada`).
 **Descartado:** o booleano `is_admin` que o projeto tinha — não expressa nível nenhum, e o
 segundo caso de uso já pede um segundo booleano, momento em que "esse usuário pode?" passa
 a ter duas respostas possíveis.
-**Descartado:** níveis numéricos ordenados (`USUARIO=10, GERENTE=50, ADMIN=100`, com o
-decorator exigindo "este nível ou acima"). É menos código, mas quebra no primeiro
-requisito do tipo "o gerente vê tudo e altera só o que é dele" — exatamente o que
-`GERENTE` faz aqui. Quando isso acontece, ou se inventa um degrau intermediário sem
-significado, ou se fura o modelo.
+**Descartado:** níveis numéricos ordenados (`USUARIO=10, ADMIN=100`, com o decorator exigindo
+"este nível ou acima"). É menos código, mas quebra no primeiro requisito do tipo "vê tudo e
+altera só o que é dele": ou se inventa um degrau intermediário sem significado, ou se fura o
+modelo.
 **Descartado:** RBAC em tabelas (`roles`, `permissions`, `role_permissions`), administrável
 em tempo de execução. São três tabelas, três modelos, três repositórios, CRUD, cache e
 dois JOINs por requisição — para uma flexibilidade que, numa base, ninguém configura. Em
@@ -550,7 +547,7 @@ resolver disputas de VIN, não ler a telemetria de todos: menor privilégio dos 
 **Descartado:** a silver como `usuario` com o bronze a mais (poderia cadastrar e enviar);
 o bronze dentro do `admin` (a hierarquia daria a leitura a quem só administra).
 **Consequência:** o papel só nasce pela CLI (`flask create-user --role silver`). O cadastro
-público, quando existir, cria sempre `usuario`.
+público cria sempre `usuario`, e o schema dele nem tem o campo `role`.
 
 ### O papel mora só no banco, nunca no token
 A autorização lê `current_user.role`, da linha que o `user_lookup_loader` já carregou.
@@ -580,6 +577,9 @@ lugar só, e com a permissão de escopo explícita no ponto de chamada.
 traceback e `request_id` no log —, e não exceção de domínio: nenhuma requisição chega lá
 (a rota de criação passa `current_user.id`), então é defeito de quem chamou, e um 422 daria
 ao cliente algo sobre o que ele não pode agir.
+**Exceção:** o `TokenService` não recebe escopo. O `jti` é a própria credencial: quem chega
+até ele já provou, pela assinatura do token, ser o dono da linha, e nenhuma permissão alcança
+o token de outra pessoa.
 **Descartado:** passar o usuário no construtor do serviço (como num dos projetos de
 origem) — incompatível com um container de DI, que cria fábricas sem contexto de
 requisição.
@@ -609,6 +609,48 @@ segue a regra do escopo explícito e sem padrão como o CRUD.
 **Descartado:** o pipeline receber `user_id: int | None`, com `None` querendo dizer "de
 todos": seria o default "sem filtro" que a decisão acima evita, e um segundo vocabulário para
 a mesma coisa; liberar o `service.base_service` no pipeline.
+
+### A entidade de exemplo saiu; o molde é o `Vehicle`
+A base trazia o `Item` e os papéis `leitor` e `gerente` para demonstrar o caminho completo. Com
+as entidades reais no lugar, a migração 0006 apaga a tabela `items` e troca o CHECK dos papéis,
+e as contas `leitor` e `gerente` viram `usuario`.
+**Por quê:** código de exemplo que continua no ar é superfície de ataque, e `usuario` é o papel
+que o cadastro público dá a qualquer um. O `Vehicle` tem as mesmas peças (cinco
+schemas, dono, exclusão lógica, escopos), e o `tests/test_authz.py` passou a usá-lo.
+**Custo aceito:** a conta que um operador criou como `leitor` passa a escrever nos próprios
+veículos e a enviar telemetria, e o `gerente` deixa de ler os de todos. Por isso o checklist de
+produção do README pede a conferência dessas contas antes de migrar. O `downgrade` recria a
+estrutura, não os dados: os itens não voltam, e quem era `leitor` ou `gerente` continua `usuario`.
+
+### Sessão longa por token de renovação, que gira a cada uso
+O token de acesso vale 15 minutos e o de renovação, 30 dias. Cada renovação devolve um par novo
+e marca o token anterior com o sucessor (`replaced_by_jti`). Os tokens de um mesmo login formam
+uma **família**: o `family_id` é o `jti` do primeiro. Reapresentar um token já trocado revoga a
+família inteira e responde 401, e o logout também. `flask set-password` revoga as famílias
+todas do usuário, na transação da troca.
+**Por quê:** o app mobile precisa de sessão longa, e um token de acesso longo não é revogável
+sem consultar o banco em toda requisição. Com a rotação, um token copiado vale no máximo até o
+dono renovar de novo, e o reuso denuncia o roubo: só um dos dois lados pode estar com o token
+certo, e não há como saber qual, então os dois perdem a sessão.
+**Como:**
+- só a rota conhece a biblioteca de JWT e emite os tokens; o `TokenService` recebe o `jti` e
+  decide o que ele ainda vale;
+- revogar é a exclusão lógica da linha (`deleted`): o repositório já não enxerga o token, e o
+  `flask prune-tokens` apaga as linhas expiradas;
+- a troca trava a linha (`SELECT ... FOR UPDATE`): de duas renovações simultâneas, a segunda
+  espera e vê um reuso. A revogação trava as linhas numa instrução e faz o `UPDATE` em outra,
+  para alcançar o sucessor que uma renovação em andamento acabou de inserir (os dois casos em
+  `tests/test_refresh.py`).
+
+**Descartado:** token de acesso longo (irrevogável); refresh sem rotação (o token copiado vale
+30 dias sem deixar rastro); o `token_in_blocklist_loader` do Flask-JWT-Extended, que estava no
+plano. O token reapresentado precisa passar por ele para que o serviço derrube a família, então
+o loader só recusaria o revogado, e o serviço teria de conferir de novo sob a trava: uma consulta
+e um lugar de decisão a mais.
+**Custo aceito:** o token de acesso continua valendo até expirar depois do logout (no máximo 15
+minutos). E não há janela de tolerância: o app que repetir a renovação por uma falha de rede
+depois de o servidor já ter trocado o token cai no reuso e precisa fazer login de novo. Só
+vale a pena afrouxar isso medindo quantas sessões caem assim.
 
 ### Claim `sub` do JWT só com o id, em string
 Exigência da RFC 7519, e versões recentes do Flask-JWT-Extended rejeitam outro formato. O

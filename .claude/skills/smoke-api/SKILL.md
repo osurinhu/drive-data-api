@@ -1,6 +1,6 @@
 ---
 name: smoke-api
-description: Sobe a API real no Docker com o código atual e a confere por HTTP de ponta a ponta — health, OpenAPI, login JWT, CRUD de item e de veículo, os motoristas, o envio de lote de telemetria (202 e a mensagem na fila), a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log de acesso — num container avulso com banco e vhost do RabbitMQ descartáveis, sem tocar nos dados do banco de desenvolvimento, na fila de desenvolvimento nem no api que já está rodando. Use para ver uma mudança funcionando na aplicação de verdade (não só nos testes); antes de concluir mudança em rota, autenticação, configuração, Dockerfile, entrypoint, dependências ou migração; e quando pedirem para rodar, subir ou testar a API.
+description: Sobe a API real no Docker com o código atual e a confere por HTTP de ponta a ponta — health, OpenAPI, cadastro, login JWT, renovação e logout, CRUD de veículo, os motoristas, o envio de lote de telemetria (202 e a mensagem na fila), a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log de acesso — num container avulso com banco e vhost do RabbitMQ descartáveis, sem tocar nos dados do banco de desenvolvimento, na fila de desenvolvimento nem no api que já está rodando. Use para ver uma mudança funcionando na aplicação de verdade (não só nos testes); antes de concluir mudança em rota, autenticação, configuração, Dockerfile, entrypoint, dependências ou migração; e quando pedirem para rodar, subir ou testar a API.
 allowed-tools: Bash(bash .claude/skills/smoke-api/smoke.sh *)
 ---
 
@@ -48,10 +48,10 @@ o próximo `docker compose up -d` recria o `api` com o código que estava no dis
 
 ## Quando a matriz precisa mudar
 
-A matriz cobre `Item`, que é o molde, `Vehicle` (VIN único entre todos os donos, 403 da
-`silver`, escopo do admin) e o envio de lote (202 parcial com a mensagem na fila, 403 da
+A matriz cobre o cadastro e a sessão (renovação, reuso, logout), `Vehicle`, que é o molde (VIN
+único entre todos os donos, 403 da `silver`, escopo do admin), os motoristas e o envio de lote (202 parcial com a mensagem na fila, 403 da
 `silver`, 422 do lote vazio). Entidade nova com rota própria ganha as linhas dela,
-copiando as de item: criação, 403 do `leitor`, 404 do alheio, escopo do gerente e do admin.
+copiando as de veículo: criação, 403 da `silver`, 404 do alheio e escopo do admin.
 Mantenha a matriz curta. O pytest cobre os detalhes; o smoke prova que a aplicação de verdade
 responde. Mudou uma regra de status (uma rota passou a ser pública, por exemplo)? Ajuste a linha
 correspondente na mesma mudança.

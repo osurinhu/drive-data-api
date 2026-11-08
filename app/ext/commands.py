@@ -6,7 +6,7 @@ from flask.cli import with_appcontext
 
 from domain.authz import Role
 from ext.database import db
-from service.errors import ConflictError, NotFoundError
+from service.errors import BusinessRuleError, ConflictError, NotFoundError
 
 #: Opção reutilizada pelos comandos que recebem um papel. `click.Choice` sai da
 #: própria enumeração: acrescentar um papel em `domain/authz.py` acrescenta a opção
@@ -50,7 +50,7 @@ def create_user(name: str, password: str, role: str) -> None:
     service = current_app.container.user_service()
     try:
         user = service.register(name=name, password=password, role=Role(role))
-    except ConflictError as error:
+    except (ConflictError, BusinessRuleError) as error:
         raise click.ClickException(str(error)) from error
 
     click.echo(f"Usuário '{user.name}' (id={user.id}) criado com o papel '{user.role.value}'.")
@@ -74,6 +74,35 @@ def set_role(name: str, role: str) -> None:
     click.echo(f"Usuário '{user.name}' agora tem o papel '{user.role.value}'.")
 
 
+@click.command("set-password")
+@click.option("--name", prompt=True, help="Nome de login do usuário.")
+@click.option(
+    "--password",
+    prompt=True,
+    hide_input=True,
+    confirmation_prompt=True,
+    help="Nova senha.",
+)
+@with_appcontext
+def set_password(name: str, password: str) -> None:
+    """Troca a senha de um usuário e encerra todas as sessões dele."""
+    service = current_app.container.user_service()
+    try:
+        user = service.set_password(name, password)
+    except (NotFoundError, BusinessRuleError) as error:
+        raise click.ClickException(str(error)) from error
+
+    click.echo(f"Senha de '{user.name}' trocada; as sessões da conta foram encerradas.")
+
+
+@click.command("prune-tokens")
+@with_appcontext
+def prune_tokens() -> None:
+    """Apaga os tokens de renovação expirados."""
+    removed = current_app.container.token_service().prune()
+    click.echo(f"{removed} token(s) expirado(s) apagado(s).")
+
+
 def init_app(app: Flask) -> None:
-    for command in (create_db, drop_db, create_user, set_role):
+    for command in (create_db, drop_db, create_user, set_role, set_password, prune_tokens):
         app.cli.add_command(command)

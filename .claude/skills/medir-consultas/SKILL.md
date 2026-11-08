@@ -1,7 +1,7 @@
 ---
 name: medir-consultas
 description: Mede quantos comandos SQL uma operação emite — rota inteira ou chamada de serviço —, com a fixture sql_log, e compara a mesma listagem com 1 e com 20 registros para detectar N+1. Use antes de otimizar consulta, repositório ou serialização ("medido, não suposto"), ao suspeitar de N+1 ou lentidão, ao aninhar relacionamento num schema de saída, ao acrescentar loader_options, e quando o tests/test_write_cost.py ou o tests/test_read_cost.py reprovar.
-argument-hint: "<operação a medir, ex.: GET /item/ com 20 itens>"
+argument-hint: "<operação a medir, ex.: GET /vehicle/ com 20 veículos>"
 allowed-tools: Bash(bash .claude/skills/verificar/verificar.sh *)
 ---
 
@@ -23,7 +23,8 @@ O nome é fixo: é ele que o modo `medir` roda e que o `/verificar` (tudo) recus
 O `/verificar` (tudo) recusa rodar enquanto este arquivo existir.
 """
 
-ITEM_URL = "/api/v1/item/"
+VEHICLE_URL = "/api/v1/vehicle/"
+VIN = "93YBSR7RHEJ2981"  # + dois dígitos
 
 
 def _relatorio(titulo: str, sql_log: list[str]) -> None:
@@ -43,23 +44,29 @@ def test_medir_listagem(client, login, sql_log):
     criados = 0
     for total in (1, 20):
         while criados < total:
-            resposta = client.post(ITEM_URL, json={"name": f"medido {criados}"}, headers=headers)
+            resposta = client.post(
+                VEHICLE_URL, json={"vin": f"{VIN}{criados:02d}"}, headers=headers
+            )
             assert resposta.status_code == 201
             criados += 1
 
         sql_log.clear()
-        resposta = client.get(ITEM_URL, query_string={"per_page": 100}, headers=headers)
+        resposta = client.get(VEHICLE_URL, query_string={"per_page": 100}, headers=headers)
 
         assert resposta.status_code == 200
-        _relatorio(f"GET {ITEM_URL} com {total} registro(s)", sql_log)
+        _relatorio(f"GET {VEHICLE_URL} com {total} registro(s)", sql_log)
 
 
 def test_medir_escrita_pela_rota(client, login, sql_log):
     _, headers = login(name="medidor")
-    item_id = client.post(ITEM_URL, json={"name": "antes"}, headers=headers).get_json()["id"]
+    vehicle_id = client.post(
+        VEHICLE_URL, json={"vin": f"{VIN}00"}, headers=headers
+    ).get_json()["id"]
 
     sql_log.clear()
-    resposta = client.patch(f"{ITEM_URL}{item_id}", json={"name": "depois"}, headers=headers)
+    resposta = client.patch(
+        f"{VEHICLE_URL}{vehicle_id}", json={"nickname": "depois"}, headers=headers
+    )
 
     assert resposta.status_code == 200
     _relatorio("PATCH pela rota (autenticação + escrita + serialização)", sql_log)
@@ -70,9 +77,9 @@ def test_medir_servico(app, sql_log, make_user):
 
     sql_log.clear()
     with app.app_context():
-        app.container.item_service().create(user["id"], name="medido")
+        app.container.vehicle_service().create(user["id"], vin=f"{VIN}00")
 
-    _relatorio("ItemService.create, sem HTTP", sql_log)
+    _relatorio("VehicleService.create, sem HTTP", sql_log)
 ```
 
 - Sempre chame `sql_log.clear()` depois do preparo: só a operação medida entra na conta.
@@ -81,7 +88,7 @@ def test_medir_servico(app, sql_log, make_user):
 - N+1 de relacionamento muitos-para-um só aparece com **donos diferentes**. Se todos os registros
   forem do mesmo usuário, o dono já está na sessão (o `current_user` o carregou) e o SQLAlchemy o
   reaproveita sem consulta. Para medir esse caso, crie registros de vários usuários e liste como
-  `gerente`.
+  `admin`.
 
 ## 2. Rodar
 
@@ -91,16 +98,16 @@ bash .claude/skills/verificar/verificar.sh medir          # ou: medir -k listage
 
 ## 3. Ler o resultado
 
-Referência medida em 2026-11-06 sobre `Item`:
+Referência medida em 2026-11-08 sobre `Vehicle`:
 
 | Operação | Comandos | De onde vem cada um |
 |---|---|---|
-| `GET /item/` com 1 ou com 20 registros | 3 SELECT | usuário do token, página, contagem |
-| `PATCH /item/<id>` pela rota | 3 SELECT + 1 UPDATE | usuário do token, carga com posse, UPDATE, recarga depois do commit |
-| `ItemService.create` sem HTTP | 1 INSERT | `INSERT ... RETURNING`; nada de SELECT |
-| `GET /item/` com 20 itens de 20 donos, listados pelo `gerente`, com um campo de saída lendo `item.owner` (mutação de ensaio) | 23 SELECT | os 3 de sempre + 1 por dono: **N+1** |
-| o mesmo, com 20 itens de um dono só | 3 SELECT | o dono já estava na sessão: o N+1 não aparece |
-| os dois casos acima com `loader_options = (selectinload(Item.owner),)` | 4 SELECT | os 3 + 1 do `selectinload`, constante. Com um dono só, custa 1 a mais |
+| `GET /vehicle/` com 1 ou com 20 registros | 3 SELECT | usuário do token, página, contagem |
+| `PATCH /vehicle/<id>` pela rota | 3 SELECT + 1 UPDATE | usuário do token, carga com posse, UPDATE, recarga depois do commit |
+| `VehicleService.create` sem HTTP | 1 INSERT | `INSERT ... RETURNING`; nada de SELECT |
+| listagem de 20 registros de 20 donos, por quem lê os de todos, com um campo de saída lendo `x.owner` (mutação de ensaio de 2026-11-06, no exemplo que saiu na Fase 3) | 23 SELECT | os 3 de sempre + 1 por dono: **N+1** |
+| o mesmo, com 20 registros de um dono só | 3 SELECT | o dono já estava na sessão: o N+1 não aparece |
+| os dois casos acima com `loader_options = (selectinload(X.owner),)` | 4 SELECT | os 3 + 1 do `selectinload`, constante. Com um dono só, custa 1 a mais |
 | `GET /vehicle/<id>/drivers` com 20 motoristas (3 relações muitos-para-um), medido em 2026-11-08 | 24 sem eager load, 7 com `selectinload`, 4 com `joinedload` | o `selectinload` custa 1 por relação, mesmo com o objeto na sessão; o `joinedload` vem na página. Fixado em `tests/test_read_cost.py` |
 
 - **Toda requisição autenticada custa 1 SELECT em `users`.** É deliberado (02-decisoes, "`current_user`

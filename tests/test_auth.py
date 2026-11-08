@@ -1,4 +1,4 @@
-"""Autenticação: emissão de token e identidade."""
+"""Autenticação: login e identidade. A renovação fica em `test_refresh.py`."""
 
 import jwt
 
@@ -16,6 +16,7 @@ def test_token_com_credenciais_validas(client, make_user):
     body = response.get_json()
     assert body["token_type"] == "Bearer"
     assert body["access_token"]
+    assert body["refresh_token"]
     assert body["expires_in"] > 0
 
 

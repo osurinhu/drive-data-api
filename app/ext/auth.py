@@ -45,22 +45,23 @@ def _user_lookup(_jwt_header: dict, jwt_payload: dict):
 
 # --- Normalização dos erros de token -----------------------------------------
 # Os parâmetros com prefixo `_` são impostos pela assinatura que o
-# Flask-JWT-Extended espera; não são usados aqui.
+# Flask-JWT-Extended espera; não são usados aqui. As mensagens não dizem "de acesso"
+# nem "de renovação": valem para os dois tipos de token.
 
 
 @jwt.unauthorized_loader
 def _missing_token(_reason: str):
-    return error_response(401, "Token de acesso ausente.")
+    return error_response(401, "Token ausente.")
 
 
 @jwt.invalid_token_loader
 def _invalid_token(_reason: str):
-    return error_response(401, "Token de acesso inválido.")
+    return error_response(401, "Token inválido.")
 
 
 @jwt.expired_token_loader
 def _expired_token(_jwt_header: dict, _jwt_payload: dict):
-    return error_response(401, "Token de acesso expirado.")
+    return error_response(401, "Token expirado.")
 
 
 @jwt.user_lookup_error_loader
@@ -120,6 +121,25 @@ def permission_required(*permissions: Permission):
 #: Piso mínimo: exige token e nada mais. Use em rota que qualquer usuário
 #: autenticado pode acessar.
 authenticated = permission_required()
+
+
+def refresh_token_required(fn):
+    """Exige o token de renovação no header ``Authorization``, e não o de acesso.
+
+    Só renovar e encerrar a sessão o aceitam: nas demais rotas, o token de renovação é
+    recusado. O que ele ainda vale (revogado, já trocado) quem decide é o ``TokenService``,
+    na mesma transação da troca; aqui só se confere a assinatura, a validade e o usuário.
+    """
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        verify_jwt_in_request(refresh=True)
+        return fn(*args, **kwargs)
+
+    # A marca que o `tests/test_contracts.py` procura em toda rota protegida.
+    wrapper.__permissoes__ = frozenset()
+    wrapper.__token_de_renovacao__ = True
+    return wrapper
 
 
 def current_owner_scope(permission: Permission) -> OwnerScope:

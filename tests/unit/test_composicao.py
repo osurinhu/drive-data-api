@@ -207,13 +207,13 @@ def test_o_consumer_sobe_sem_postgres_sem_jwt_e_sem_importar_os_dois():
 @pytest.mark.parametrize(
     ("perfil", "esperadas"),
     [
-        pytest.param("api", "auth,health,item,telemetry,vehicle,vehicle_driver", id="api"),
+        pytest.param("api", "auth,health,registration,telemetry,vehicle,vehicle_driver", id="api"),
         pytest.param("bronze_api", "auth,bronze,health", id="bronze_api"),
     ],
 )
 def test_o_processo_so_importa_as_rotas_do_proprio_perfil(perfil, esperadas):
     """O container liga (e, para isso, importa) só as rotas do perfil. Com o
-    pacote inteiro no wiring, o bronze_api importaria a rota de item e o envio de
+    pacote inteiro no wiring, o bronze_api importaria a rota de veículo e o envio de
     telemetria, e o api, a leitura do bronze."""
     prefixo = "blueprint.restapi.v1."
     rotas = _montar_num_processo_a_parte(

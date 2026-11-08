@@ -4,21 +4,20 @@ O que estes testes fixam, e que nenhum teste de CRUD pegaria:
 
 * a permissão decide a **operação** (403) e o ownership decide o **registro**
   (404) — duas respostas diferentes, de propósito;
-* cada escrita declara a sua permissão: o piso da classe é de leitura. O
-  `test_contracts.py` reprova a escrita sem decorator; o 403 daqui prova que
-  a permissão declarada é a de escrita;
-* escopo de leitura e escopo de escrita são permissões separadas, então existe
-  um papel que vê tudo e altera só o que é dele;
+* escopo de leitura e escopo de escrita são permissões separadas: a rota de escrita
+  não pode aceitar o escopo de leitura;
 * o papel é lido do banco, não do token.
 """
 
 from domain.authz import ROLE_PERMISSIONS, Permission, Role, has_permission, permissions_of
 
-ITEM_URL = "/api/v1/item/"
+VEHICLE_URL = "/api/v1/vehicle/"
+VIN = "93YBSR7RHEJ298116"
+OUTRO_VIN = "9BWZZZ377VT004251"
 
 
-def _criar(client, headers, name: str) -> int:
-    response = client.post(ITEM_URL, json={"name": name}, headers=headers)
+def _cadastrar(client, headers, vin: str = VIN) -> int:
+    response = client.post(VEHICLE_URL, json={"vin": vin}, headers=headers)
     assert response.status_code == 201, response.get_json()
     return response.get_json()["id"]
 
@@ -28,9 +27,7 @@ def _criar(client, headers, name: str) -> int:
 
 def test_os_papeis_sao_cumulativos():
     """A hierarquia existe por inclusão de conjuntos, não por peso numérico."""
-    assert permissions_of(Role.LEITOR) < permissions_of(Role.USUARIO)
-    assert permissions_of(Role.USUARIO) < permissions_of(Role.GERENTE)
-    assert permissions_of(Role.GERENTE) < permissions_of(Role.ADMIN)
+    assert permissions_of(Role.USUARIO) < permissions_of(Role.ADMIN)
 
 
 def test_a_silver_e_um_ramo_a_parte():
@@ -41,8 +38,10 @@ def test_a_silver_e_um_ramo_a_parte():
 
 
 def test_has_permission_exige_todas_as_informadas():
-    assert has_permission(Role.ADMIN, Permission.ITEM_LER, Permission.ITEM_ESCREVER_DE_TODOS)
-    assert not has_permission(Role.GERENTE, Permission.ITEM_LER, Permission.ITEM_ESCREVER_DE_TODOS)
+    exigidas = (Permission.VEICULO_LER, Permission.VEICULO_ESCREVER_DE_TODOS)
+
+    assert has_permission(Role.ADMIN, *exigidas)
+    assert not has_permission(Role.USUARIO, *exigidas)
 
 
 def test_papel_desconhecido_nao_tem_permissao_nenhuma():
@@ -55,11 +54,9 @@ def test_papel_desconhecido_nao_tem_permissao_nenhuma():
 
 
 def test_sem_a_permissao_da_operacao_responde_403(client, login):
-    """`leitor` tem `item:ler` e não `item:escrever`: é o papel que a base traz
-    para que este caso exista sem precisar remendar o mapa de permissões."""
-    _, headers = login(name="le", role=Role.LEITOR)
+    _, headers = login(name="etl", role=Role.SILVER)
 
-    response = client.post(ITEM_URL, json={"name": "proibido"}, headers=headers)
+    response = client.post(VEHICLE_URL, json={"vin": VIN}, headers=headers)
 
     assert response.status_code == 403
     assert response.get_json()["message"] == "Seu perfil não permite esta operação."
@@ -68,87 +65,108 @@ def test_sem_a_permissao_da_operacao_responde_403(client, login):
 def test_o_403_vem_antes_da_validacao_do_corpo(client, login):
     """Quem não pode fazer a operação não deve descobrir o formato esperado do
     corpo dela: 403, e não o 422 que o schema daria."""
-    _, headers = login(name="le", role=Role.LEITOR)
+    _, headers = login(name="etl", role=Role.SILVER)
 
-    response = client.post(ITEM_URL, json={"campo": "invalido"}, headers=headers)
+    response = client.post(VEHICLE_URL, json={"campo": "invalido"}, headers=headers)
 
     assert response.status_code == 403
 
 
-def test_leitor_nao_altera_nem_exclui_o_proprio_item(client, login, set_role):
-    """O piso da classe é de leitura: cada escrita depende do seu próprio
-    `@permission_required`, e só este teste diz se ele exige a permissão certa
-    (o `test_contracts.py` confere que existe). Dona do item, `ana` só pode levar
-    o 403 da permissão — nunca o 404 do ownership."""
-    ana, headers = login(name="ana")
-    item_id = _criar(client, headers, "da ana")
-    set_role(ana["name"], Role.LEITOR)
+def test_sem_permissao_alguma_nenhuma_rota_de_veiculo_abre(client, login):
+    """A `silver` não tem `veiculo:ler`, e o GET não tem decorator próprio: é o piso
+    declarado na classe que nega."""
+    _, headers = login(name="etl", role=Role.SILVER)
 
-    patch = client.patch(f"{ITEM_URL}{item_id}", json={"name": "mexido"}, headers=headers)
-    delete = client.delete(f"{ITEM_URL}{item_id}", headers=headers)
-
-    assert patch.status_code == 403
-    assert delete.status_code == 403
-    assert client.get(f"{ITEM_URL}{item_id}", headers=headers).get_json()["name"] == "da ana"
+    assert client.get(VEHICLE_URL, headers=headers).status_code == 403
+    assert client.get(f"{VEHICLE_URL}1", headers=headers).status_code == 403
 
 
-def test_sem_permissao_alguma_nenhuma_rota_de_item_abre(client, login, monkeypatch):
-    """O único `monkeypatch` que sobrou, e o porquê: nenhum papel da base fica
-    sem `item:ler`, então é o único jeito de provar que o piso declarado na
-    classe nega — o GET não tem decorator próprio."""
-    _, headers = login(name="le", role=Role.LEITOR)
-    monkeypatch.setitem(ROLE_PERMISSIONS, Role.LEITOR, frozenset())
+def test_quem_so_le_o_veiculo_nao_escreve_nada(client, login, make_user, monkeypatch):
+    """Nenhum papel de hoje só lê, e o 403 da `silver` sai do piso da classe. O
+    `test_contracts.py` confere que cada escrita declara *uma* permissão; é este teste que
+    prova que é a de escrita. Dona do veículo, `ana` só pode levar o 403 — nunca o 404."""
+    _, headers = login(name="ana")
+    joao = make_user(name="joao")
+    vehicle_id = _cadastrar(client, headers)
+    url = f"{VEHICLE_URL}{vehicle_id}"
+    adicao = client.post(f"{url}/drivers", json={"user_name": "joao"}, headers=headers)
+    assert adicao.status_code == 201
+    monkeypatch.setitem(ROLE_PERMISSIONS, Role.USUARIO, frozenset({Permission.VEICULO_LER}))
 
-    assert client.get(ITEM_URL, headers=headers).status_code == 403
-    assert client.get(f"{ITEM_URL}1", headers=headers).status_code == 403
+    respostas = [
+        client.post(VEHICLE_URL, json={"vin": OUTRO_VIN}, headers=headers),
+        client.patch(url, json={"nickname": "x"}, headers=headers),
+        client.delete(url, headers=headers),
+        client.post(f"{url}/drivers", json={"user_name": "maria"}, headers=headers),
+        client.delete(f"{url}/drivers/{joao['id']}", headers=headers),
+        client.delete(f"{VEHICLE_URL}driving/{vehicle_id}", headers=headers),
+    ]
+
+    assert [r.status_code for r in respostas] == [403] * 6
+    assert client.get(url, headers=headers).status_code == 200
 
 
 # --- 404: o registro ----------------------------------------------------------
 
 
-def test_gerente_enxerga_o_item_de_outro_dono(client, login):
+def test_o_escopo_de_leitura_nao_abre_a_escrita(client, login, monkeypatch):
+    """Nenhum papel de hoje vê tudo e altera só o próprio, mas as permissões existem
+    separadas para isso. Com o `monkeypatch`, a rota de escrita que aceitasse o escopo
+    de leitura por engano reprova aqui: o admin, que tem os dois, não a pegaria."""
     _, headers_ana = login(name="ana")
-    _, headers_gerente = login(name="gi", role=Role.GERENTE)
-    item_id = _criar(client, headers_ana, "da ana")
+    _, headers_bruno = login(name="bruno")
+    vehicle_id = _cadastrar(client, headers_ana)
+    url = f"{VEHICLE_URL}{vehicle_id}"
+    monkeypatch.setitem(
+        ROLE_PERMISSIONS,
+        Role.USUARIO,
+        ROLE_PERMISSIONS[Role.USUARIO] | {Permission.VEICULO_LER_DE_TODOS},
+    )
 
-    assert client.get(f"{ITEM_URL}{item_id}", headers=headers_gerente).status_code == 200
-    assert client.get(ITEM_URL, headers=headers_gerente).get_json()["total_of_items"] == 1
-
-
-def test_gerente_nao_altera_o_item_de_outro_dono(client, login):
-    """O ponto do modelo: o gerente *pode* escrever item (passa no decorator),
-    mas o escopo de escrita dele é o próprio — então o item alheio responde 404,
-    pelo mesmo motivo de sempre (um 403 confirmaria que ele existe)."""
-    _, headers_ana = login(name="ana")
-    _, headers_gerente = login(name="gi", role=Role.GERENTE)
-    item_id = _criar(client, headers_ana, "da ana")
-
+    assert client.get(url, headers=headers_bruno).status_code == 200
+    assert client.get(f"{url}/drivers", headers=headers_bruno).status_code == 200
+    assert client.patch(url, json={"nickname": "x"}, headers=headers_bruno).status_code == 404
+    assert client.delete(url, headers=headers_bruno).status_code == 404
     assert (
-        client.patch(
-            f"{ITEM_URL}{item_id}", json={"name": "mexido"}, headers=headers_gerente
-        ).status_code
+        client.post(f"{url}/drivers", json={"user_name": "ana"}, headers=headers_bruno).status_code
         == 404
     )
-    assert client.delete(f"{ITEM_URL}{item_id}", headers=headers_gerente).status_code == 404
+    assert client.delete(f"{url}/drivers/1", headers=headers_bruno).status_code == 404
 
 
-def test_administrador_altera_o_item_de_outro_dono(client, login):
+def test_usuario_nao_ve_nem_altera_o_veiculo_de_outro_dono(client, login):
+    """O dono de outro registro *pode* escrever veículo (passa no decorator), mas o
+    escopo dele é o próprio: o alheio responde 404, porque um 403 confirmaria que ele
+    existe."""
+    _, headers_ana = login(name="ana")
+    _, headers_bruno = login(name="bruno")
+    vehicle_id = _cadastrar(client, headers_ana)
+    url = f"{VEHICLE_URL}{vehicle_id}"
+
+    assert client.get(url, headers=headers_bruno).status_code == 404
+    assert client.patch(url, json={"nickname": "x"}, headers=headers_bruno).status_code == 404
+    assert client.delete(url, headers=headers_bruno).status_code == 404
+
+
+def test_administrador_altera_o_veiculo_de_outro_dono(client, login):
     _, headers_ana = login(name="ana")
     _, headers_admin = login(name="raiz", role=Role.ADMIN)
-    item_id = _criar(client, headers_ana, "da ana")
+    vehicle_id = _cadastrar(client, headers_ana)
 
-    response = client.patch(f"{ITEM_URL}{item_id}", json={"name": "mexido"}, headers=headers_admin)
+    response = client.patch(
+        f"{VEHICLE_URL}{vehicle_id}", json={"nickname": "mexido"}, headers=headers_admin
+    )
 
     assert response.status_code == 200
-    assert response.get_json()["name"] == "mexido"
+    assert response.get_json()["nickname"] == "mexido"
 
 
 def test_administrador_cria_com_dono_concreto(client, login):
     """Nem administrador cria "sem dono": o POST usa `current_user.id`."""
     user, headers_admin = login(name="raiz", role=Role.ADMIN)
-    item_id = _criar(client, headers_admin, "do admin")
+    vehicle_id = _cadastrar(client, headers_admin)
 
-    body = client.get(f"{ITEM_URL}{item_id}", headers=headers_admin).get_json()
+    body = client.get(f"{VEHICLE_URL}{vehicle_id}", headers=headers_admin).get_json()
 
     assert body["owner_id"] == user["id"]
 
@@ -161,25 +179,25 @@ def test_rebaixar_o_papel_vale_na_requisicao_seguinte(client, login, set_role):
     rebaixamento só teria efeito quando ele expirasse."""
     _, headers_ana = login(name="ana")
     admin, headers_admin = login(name="raiz", role=Role.ADMIN)
-    item_id = _criar(client, headers_ana, "da ana")
+    vehicle_id = _cadastrar(client, headers_ana)
 
-    assert client.get(f"{ITEM_URL}{item_id}", headers=headers_admin).status_code == 200
+    assert client.get(f"{VEHICLE_URL}{vehicle_id}", headers=headers_admin).status_code == 200
 
     set_role(admin["name"], Role.USUARIO)
 
-    assert client.get(f"{ITEM_URL}{item_id}", headers=headers_admin).status_code == 404
+    assert client.get(f"{VEHICLE_URL}{vehicle_id}", headers=headers_admin).status_code == 404
 
 
 def test_promover_o_papel_vale_na_requisicao_seguinte(client, login, set_role):
     _, headers_ana = login(name="ana")
-    gi, headers_gi = login(name="gi")
-    item_id = _criar(client, headers_ana, "da ana")
+    bruno, headers_bruno = login(name="bruno")
+    vehicle_id = _cadastrar(client, headers_ana)
 
-    assert client.get(f"{ITEM_URL}{item_id}", headers=headers_gi).status_code == 404
+    assert client.get(f"{VEHICLE_URL}{vehicle_id}", headers=headers_bruno).status_code == 404
 
-    set_role(gi["name"], Role.GERENTE)
+    set_role(bruno["name"], Role.ADMIN)
 
-    assert client.get(f"{ITEM_URL}{item_id}", headers=headers_gi).status_code == 200
+    assert client.get(f"{VEHICLE_URL}{vehicle_id}", headers=headers_bruno).status_code == 200
 
 
 # --- Autenticação continua antes de tudo --------------------------------------
@@ -188,9 +206,9 @@ def test_promover_o_papel_vale_na_requisicao_seguinte(client, login, set_role):
 def test_sem_token_responde_401_e_nao_403(client):
     """A ordem importa: 403 em rota sem token revelaria que ela existe e exige
     permissão. Quem não se identificou leva 401."""
-    assert client.get(ITEM_URL).status_code == 401
-    assert client.post(ITEM_URL, json={"name": "x"}).status_code == 401
-    assert client.patch(f"{ITEM_URL}1", json={"name": "x"}).status_code == 401
+    assert client.get(VEHICLE_URL).status_code == 401
+    assert client.post(VEHICLE_URL, json={"vin": VIN}).status_code == 401
+    assert client.patch(f"{VEHICLE_URL}1", json={"nickname": "x"}).status_code == 401
 
 
 # --- Custo --------------------------------------------------------------------
@@ -204,7 +222,7 @@ def test_duas_verificacoes_na_mesma_requisicao_custam_uma_consulta(client, login
     _, headers = login(name="ana")
     sql_log.clear()
 
-    assert client.post(ITEM_URL, json={"name": "medido"}, headers=headers).status_code == 201
+    assert client.post(VEHICLE_URL, json={"vin": VIN}, headers=headers).status_code == 201
 
     consultas_de_usuario = [s for s in sql_log if "FROM users" in s]
     assert len(consultas_de_usuario) == 1, consultas_de_usuario

@@ -1,6 +1,6 @@
 """Papéis, permissões e o escopo de dono — o vocabulário da autorização.
 
-Uma **permissão** é uma capacidade (`item:escrever`); um **papel** é um pacote
+Uma **permissão** é uma capacidade (`veiculo:escrever`); um **papel** é um pacote
 nomeado de permissões, e é o papel que fica gravado em `users.role`. A rota
 declara a permissão que exige, nunca o papel.
 
@@ -16,11 +16,6 @@ from enum import StrEnum
 class Permission(StrEnum):
     # Os escopos de leitura e de escrita são permissões separadas de propósito:
     # é o que permite um papel que vê tudo e altera só o que é dele.
-    ITEM_LER = "item:ler"
-    ITEM_ESCREVER = "item:escrever"
-    ITEM_LER_DE_TODOS = "item:ler-de-todos"
-    ITEM_ESCREVER_DE_TODOS = "item:escrever-de-todos"
-
     VEICULO_LER = "veiculo:ler"
     VEICULO_ESCREVER = "veiculo:escrever"
     VEICULO_LER_DE_TODOS = "veiculo:ler-de-todos"
@@ -36,26 +31,22 @@ class Permission(StrEnum):
 class Role(StrEnum):
     # O que vai para a coluna é o **valor**, não o nome do membro — ver o
     # `values_callable` em `domain/models.py`.
-    LEITOR = "leitor"
     USUARIO = "usuario"
-    GERENTE = "gerente"
     ADMIN = "admin"
     # A conta de sistema da camada silver, fora da hierarquia (ver `_SILVER`).
     SILVER = "silver"
 
 
 # Cada papel parte do anterior, para que a hierarquia esteja escrita no código em
-# vez de depender de o leitor comparar listas.
-_LEITOR = frozenset({Permission.ITEM_LER})
-_USUARIO = _LEITOR | {
-    Permission.ITEM_ESCREVER,
-    Permission.VEICULO_LER,
-    Permission.VEICULO_ESCREVER,
-    Permission.TELEMETRIA_ENVIAR,
-}
-_GERENTE = _USUARIO | {Permission.ITEM_LER_DE_TODOS}
-_ADMIN = _GERENTE | {
-    Permission.ITEM_ESCREVER_DE_TODOS,
+# vez de depender de quem lê comparar listas.
+_USUARIO = frozenset(
+    {
+        Permission.VEICULO_LER,
+        Permission.VEICULO_ESCREVER,
+        Permission.TELEMETRIA_ENVIAR,
+    }
+)
+_ADMIN = _USUARIO | {
     Permission.VEICULO_LER_DE_TODOS,
     Permission.VEICULO_ESCREVER_DE_TODOS,
 }
@@ -68,9 +59,7 @@ _SILVER = frozenset({Permission.BRONZE_LER, Permission.BRONZE_LER_DE_TODOS})
 #: Única fonte de verdade da autorização. `tests/test_contracts.py` reprova se um
 #: papel ficar sem entrada aqui, ou se uma permissão não for concedida a ninguém.
 ROLE_PERMISSIONS: Mapping[Role, frozenset[Permission]] = {
-    Role.LEITOR: _LEITOR,
     Role.USUARIO: _USUARIO,
-    Role.GERENTE: _GERENTE,
     Role.ADMIN: _ADMIN,
     Role.SILVER: _SILVER,
 }

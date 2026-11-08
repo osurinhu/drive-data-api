@@ -1,4 +1,10 @@
-"""Rotas de veículos, no molde de `item.py`."""
+"""Rotas de veículos.
+
+Molde para qualquer recurso novo. Note o quanto a rota **não** faz: nenhum
+try/except (quem traduz exceção é `ext.error_handler`), nenhuma montagem de
+consulta (é do repositório), nenhuma serialização manual (é do schema) e nenhuma
+decisão de permissão escrita à mão — ela é *declarada*.
+"""
 
 from dependency_injector.wiring import Provide, inject
 from flask.views import MethodView

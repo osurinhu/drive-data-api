@@ -17,7 +17,7 @@ Se alguém reintroduzir o `refresh()`, as contagens sobem e estes testes
 reprovam.
 """
 
-ITEM_URL = "/api/v1/item/"
+VIN = "93YBSR7RHEJ298116"
 
 
 def _selects(statements: list[str]) -> list[str]:
@@ -30,7 +30,7 @@ def test_criar_sem_ler_o_objeto_de_volta_nao_consulta(app, sql_log, make_user):
     sql_log.clear()
 
     with app.app_context():
-        app.container.item_service().create(user["id"], name="medido")
+        app.container.vehicle_service().create(user["id"], vin=VIN)
 
     assert _selects(sql_log) == []
     assert len(sql_log) == 1
@@ -44,14 +44,14 @@ def test_criar_e_serializar_custa_uma_consulta(app, sql_log, make_user):
     sql_log.clear()
 
     with app.app_context():
-        item = app.container.item_service().create(user["id"], name="medido")
+        veiculo = app.container.vehicle_service().create(user["id"], vin=VIN)
 
         # Os defaults de servidor ficam disponíveis sob demanda.
-        assert item.id is not None
-        assert item.created_at is not None
-        assert item.last_update is not None
+        assert veiculo.id is not None
+        assert veiculo.created_at is not None
+        assert veiculo.last_update is not None
         # TIMESTAMPTZ: o valor volta ciente de fuso, não naive.
-        assert item.created_at.tzinfo is not None
+        assert veiculo.created_at.tzinfo is not None
 
     assert len(_selects(sql_log)) == 1
 
@@ -61,24 +61,24 @@ def test_atualizar_e_serializar_custa_duas_consultas(app, sql_log, make_user):
     depois do commit."""
     user = make_user()
     with app.app_context():
-        item_id = app.container.item_service().create(user["id"], name="antes").id
+        vehicle_id = app.container.vehicle_service().create(user["id"], vin=VIN).id
 
     sql_log.clear()
     with app.app_context():
-        item = app.container.item_service().update(item_id, user["id"], name="depois")
-        assert item.name == "depois"
+        veiculo = app.container.vehicle_service().update(vehicle_id, user["id"], nickname="depois")
+        assert veiculo.nickname == "depois"
 
     assert len(_selects(sql_log)) == 2
 
 
 def test_criar_em_lote_emite_apenas_os_inserts(app, sql_log, make_user):
-    """Era o pior caso: o refresh multiplicava o custo por item do lote."""
+    """Era o pior caso: o refresh multiplicava o custo por registro do lote."""
     user = make_user()
     sql_log.clear()
 
     with app.app_context():
-        criados = app.container.item_service().create_many(
-            user["id"], [{"name": f"lote {i}"} for i in range(5)]
+        criados = app.container.vehicle_service().create_many(
+            user["id"], [{"vin": f"{VIN[:-1]}{i}"} for i in range(5)]
         )
 
     assert len(criados) == 5

@@ -7,7 +7,7 @@ paths:
 
 Traduz HTTP em chamada de serviço. **Não pode:** montar consulta, conter regra de negócio,
 usar `try/except` para erro de domínio, decidir permissão com `if` nem serializar à mão.
-Molde: `app/blueprint/restapi/v1/item.py`. Receitas: 03-como-estender §1.8, §2 e §10.1.
+Molde: `app/blueprint/restapi/v1/vehicle.py`. Receitas: 03-como-estender §1.8, §2 e §10.1.
 
 - Um módulo por recurso, expondo `blp = Blueprint(...)`, ativado por uma linha em
   `API_V1_ROUTES` do `[default]` **e** outra no perfil do processo que serve a rota (`[api]`
@@ -19,7 +19,7 @@ Molde: `app/blueprint/restapi/v1/item.py`. Receitas: 03-como-estender §1.8, §2
 - **Cada** método de escrita leva o seu `@permission_required(Permission.X_ESCREVER)`, **acima**
   dos decorators do smorest (quem não pode leva 403 antes de descobrir o corpo num 422). Esquecido,
   a escrita abriria para quem só lê: o `test_contracts.py` reprova escrita não pública sem
-  decorator no próprio método, e o teste de 403 com `Role.LEITOR` prova que a permissão é a certa.
+  decorator no próprio método, e o teste do papel que só lê (`test_authz.py`) prova que é a certa.
 - Qualquer autenticado: `decorators = [authenticated]` (de `ext.auth`). Rota pública:
   `@blp.doc(security=PUBLIC)` (de `ext.api`) **e** a tupla em `ROTAS_PUBLICAS`
   (`tests/test_contracts.py`); faltando um dos dois, o CI reprova.
@@ -27,7 +27,8 @@ Molde: `app/blueprint/restapi/v1/item.py`. Receitas: 03-como-estender §1.8, §2
   `current_owner_scope(Permission.X_ESCREVER_DE_TODOS)`; criação `current_user.id` (criar exige
   dono concreto — `ANY_OWNER` levantaria `TypeError`).
 - `@error_responses(blp, 403, 404, 409)` (de `blueprint.http_errors`) lista o que **esta** rota produz.
-  Nunca 401 (global no spec). 422 só em rota sem `@blp.arguments` que possa levantar
+  Nunca 401 (global no spec), exceto na rota pública que o produz, como o login: o `security=[]`
+  tira o global. 422 só em rota sem `@blp.arguments` que possa levantar
   `BusinessRuleError` (como o `arquivar` da §2); onde há `@blp.arguments`, o smorest já o documenta.
 - Sub-recurso: módulo próprio com o `url_prefix` do pai e outro nome de blueprint, com as
   permissões e os escopos do pai em toda operação do dono do pai, inclusive a criação do filho

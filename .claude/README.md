@@ -54,19 +54,16 @@ Preferências pessoais vão em `settings.local.json`, que não é versionado.
 | 2 | `/smoke-api`: a imagem de produção num container avulso, com banco descartável, um usuário por papel (`flask create-user`), a matriz 401/403/404/409/422 por curl e o `X-Request-ID` rastreado no log — também é a skill que o `/run` embutido procura | feito em 2026-11-06 e validado: 24 verificações em ~30 s, `db` e `api` de desenvolvimento intocados, caminho de falha conferido por mutação. Falta a permissão no `settings.json` (ver registro) |
 | 2 | Hook `SessionStart` com uma linha de estado do Docker (daemon, `db`, `api`) | script feito e validado em 4 cenários; **falta registrá-lo no `settings.json`** (ver registro) |
 | 2 | `/smoke-pipeline`: o compose inteiro num projeto à parte (`-p smoke-pipeline`), na imagem de produção, com um usuário por papel, a matriz da leitura do bronze e o lote do app à silver, sem perda e sem repetição; o caos entra na Fase 5 | feito em 2026-11-07 (passo 1.5) e validado: 18 verificações em ~4 min, sem tocar no ambiente de desenvolvimento. Falta a permissão no `settings.json` (ver registro) |
-| 2 | `/remover-exemplo`: tirar `Item` com segurança quando houver entidades reais (a migração 0001 cria `users` e `items` juntas; `test_write_cost`, `test_authz` e `test_contracts` usam `Item`) | a fazer, quando existir a primeira entidade real: antes disso não há como validá-lo |
+| 2 | `/remover-exemplo`: tirar `Item` com segurança quando houver entidades reais | feito à mão na Fase 3 do pipeline (2026-11-08, migração 0006). Era operação de uma vez só: a skill não chegou a existir |
 | 3 | `/medir-consultas` (padrão `sql_log` / `test_write_cost`) antes de otimizar | feito em 2026-11-06 e validado: referência de `Item` medida; N+1 provocado por mutação (23 SELECT) e remédio com `selectinload` medido (4); trava contra a medição esquecida conferida |
 | 3 | `memory: project` no revisor, para acumular erros recorrentes | avaliado em 2026-11-06: adiado. Duas revisões ainda não mostram erro recorrente, e a memória daria ao revisor escrita no repositório e o viés das revisões anteriores. Reavaliar quando o mesmo achado se repetir em revisões diferentes |
 | 3 | Calibrar permissões com `/fewer-permission-prompts` depois de algumas sessões | a fazer; mexe no `settings.json`, então fica com o usuário, fora do modo automático |
 
 ## Pendências encontradas no projeto
 
-As cinco que o ensaio do revisor encontrou foram corrigidas (ver registro). Fica uma sugestão,
-que muda uma regra de projeto e por isso é decisão do usuário:
-
-| Onde | O quê |
-|---|---|
-| `tests/test_contracts.py` | Nenhum contrato pega um método de escrita sem o seu `@permission_required` quando a classe tem o piso de leitura: só o teste de 403 daquela operação pega, e ele precisa ser escrito em cada entidade. Um contrato que exigisse, em toda rota protegida de escrita (POST, PUT, PATCH, DELETE), uma permissão que o `leitor` não tem pegaria em todas — mas troca "o piso da classe basta" por uma convenção mais rígida. |
+Nenhuma aberta. As cinco que o ensaio do revisor encontrou foram corrigidas (ver registro), e a
+sugestão que restava, um contrato para o método de escrita sem `@permission_required`, virou o
+`test_toda_escrita_protegida_declara_a_propria_permissao`.
 
 ## Registro de ajustes
 
@@ -424,3 +421,46 @@ que muda uma regra de projeto e por isso é decisão do usuário:
     ciclo, nas regras de dependência da 01; o **Descartado** e o **Custo aceito** da decisão do
     `joinedload` na 02; o `test_read_cost.py` no `/verificar` e na descrição do
     `/medir-consultas`.
+- 2026-11-08 — Pipeline de telemetria, Fase 3 (autenticação completa e saída do `Item`): cadastro
+  público, par de tokens com rotação, reuso que revoga a família, logout, JWT de 15 min com `iss`,
+  `flask set-password` e `prune-tokens`, migrações 0005 e 0006. O molde passou a ser o `Vehicle`.
+  - **Desvios do plano:**
+    - sem `token_in_blocklist_loader` nem `revoked_token_loader`: o token reusado precisa chegar
+      ao serviço, que decide sob trava. O `refresh_token_required` só confere assinatura,
+      validade e usuário;
+    - revogar é exclusão lógica (`deleted`), sem `revoked_at`, e o `family_id` é o `jti` do
+      primeiro token;
+    - a senha do login tem limite de 128 caracteres no schema, e as mensagens de token são
+      neutras ("Token inválido.");
+    - a 0006 transforma as contas `leitor` e `gerente` em `usuario`;
+    - como nenhum papel real só lê, o 403 de quem só lê é provado restringindo o mapa com
+      `monkeypatch.setitem` em `ROLE_PERMISSIONS`.
+  - **Regras alteradas:** todas as que citavam o `Item` apontam para o `Vehicle`. A
+    `autorizacao.md` ganhou o `refresh_token_required`; a `servicos.md`, a exceção do
+    `TokenService`; a `rotas.md`, o 401 da rota pública; a `testes.md`, o 403 com a `silver` e o
+    teste do papel que só lê. O `/medir-consultas` mede sobre o `Vehicle` (mesmos números). Valem
+    a partir da sessão seguinte. O `/remover-exemplo` do roadmap foi feito à mão, sem skill.
+  - **Lições:**
+    - teste de concorrência com barreira e threads não garante a sobreposição: sem o `FOR UPDATE`
+      ele continuava passando. O que reprova a mutação é a transação principal segurar a linha
+      enquanto a outra tenta (`tests/test_refresh.py`);
+    - com `@inject` no `__init__` da classe base, a filha que chama `super().__init__(arg)` leva
+      `multiple values for argument`: a filha injeta só o que é dela e chama `super().__init__()`;
+    - o `Result` do SQLAlchemy não tipa `rowcount`: `cast("CursorResult[Any]", result)`;
+    - o `/verificar testes` esconde a saída quando passa: para ver os `print` de medição, use
+      `verificar.sh medir`.
+  - **Contagens:** `/verificar tudo` com 418 testes; `/smoke-api` com 51 verificações;
+    `/smoke-pipeline` verde.
+  - **Revisão** (`revisor-arquitetura`, sem bloqueantes). Quatro achados importantes, corrigidos:
+    - o `TokenService` sem `owner_scope` não estava registrado como exceção: entrou na 02 e na
+      `servicos.md`;
+    - o `@refresh_token_required` marcava o método como "declarou", e uma rota nova com ele
+      passaria no contrato sem permissão: o
+      `test_so_renovar_e_encerrar_a_sessao_aceitam_o_token_de_renovacao` fixa as duas rotas;
+    - a migração e a 02 diziam que o `leitor` não ganhava acesso, e ele ganha escrita. O texto foi
+      corrigido, e o checklist de produção manda conferir essas contas antes da 0006;
+    - o README não listava o `/auth/register` entre as rotas públicas.
+
+    Das cinco sugestões, entraram todas: o 401 na `rotas.md`, o `op.f()` na 0006, a asserção vaga do
+    `set-password`, a preferência pelo prompt da senha no README e a pendência antiga do
+    `leitor`, que já estava resolvida pelo contrato e saiu de "Pendências".

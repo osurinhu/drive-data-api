@@ -15,7 +15,7 @@
       "Bash(docker compose ps:*)",
       "Bash(docker compose logs:*)",
       "Bash(bash .claude/skills/smoke-api/smoke.sh:*)",
-      "Bash(bash .claude/skills/smoke-pipeline/smoke.sh:*)",
+      "Bash(bash .claude/skills/smoke-pipeline/smoke.sh:*)"
     ],
     "deny": [
       "Bash(rm -rf:*)",

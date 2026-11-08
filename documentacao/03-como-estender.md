@@ -1,7 +1,7 @@
 # Como estender
 
-Treze receitas, da mais comum para a mais rara. Em todas, use `Item` como molde — a
-entidade de exemplo existe para ser copiada (e removida quando você tiver as suas).
+Treze receitas, da mais comum para a mais rara. Em todas, use `Vehicle` como molde: modelo,
+repositório, serviço, schemas, rota e testes.
 
 | Quero… | Vá para |
 |---|---|
@@ -40,7 +40,7 @@ class Product(BaseModel):
 
 `id`, `created_at`, `last_update` e `deleted` vêm do `BaseModel`.
 
-O `back_populates` exige os dois lados. Acrescente o inverso em `User`, ao lado do `items`
+O `back_populates` exige os dois lados. Acrescente o inverso em `User`, ao lado do `vehicles`
 que já está lá; sem ele, o SQLAlchemy falha ao configurar os mapeamentos no primeiro uso
 dos modelos:
 
@@ -177,10 +177,8 @@ class Permission(StrEnum):
     PRODUCT_LER_DE_TODOS = "product:ler-de-todos"
     PRODUCT_ESCREVER_DE_TODOS = "product:escrever-de-todos"
 
-_LEITOR = frozenset({..., Permission.PRODUCT_LER})
-_USUARIO = _LEITOR | {..., Permission.PRODUCT_ESCREVER}
-_GERENTE = _USUARIO | {..., Permission.PRODUCT_LER_DE_TODOS}
-_ADMIN = _GERENTE | {..., Permission.PRODUCT_ESCREVER_DE_TODOS}
+_USUARIO = frozenset({..., Permission.PRODUCT_LER, Permission.PRODUCT_ESCREVER})
+_ADMIN = _USUARIO | {..., Permission.PRODUCT_LER_DE_TODOS, Permission.PRODUCT_ESCREVER_DE_TODOS}
 ```
 
 Os escopos (`..._DE_TODOS`) são o que permite um papel ver tudo e alterar só o
@@ -236,8 +234,8 @@ Três coisas a notar:
 - Não há `try/except`: o serviço levanta exceção de domínio e o handler central traduz.
 - `@error_responses(blp, 403, 409)` documenta as respostas de erro no OpenAPI em uma linha.
 
-Para o recurso de item único (`/product/<int:product_id>`), copie `ItemResource` de
-`app/blueprint/restapi/v1/item.py`. Atenção à ordem dos parâmetros: o payload do
+Para o recurso de um registro só (`/product/<int:product_id>`), copie `VehicleResource` de
+`app/blueprint/restapi/v1/vehicle.py`. Atenção à ordem dos parâmetros: o payload do
 `@blp.arguments` vem **antes** do parâmetro da URL —
 `def patch(self, payload, product_id)`.
 
@@ -251,7 +249,7 @@ do perfil do processo que serve a rota. As rotas de negócio ficam no `[api]`.
 API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
-    "blueprint.restapi.v1.item",
+    "blueprint.restapi.v1.vehicle",
     "blueprint.restapi.v1.product",   # ← aqui
 ]
 
@@ -259,7 +257,7 @@ API_V1_ROUTES = [
 API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
-    "blueprint.restapi.v1.item",
+    "blueprint.restapi.v1.vehicle",
     "blueprint.restapi.v1.product",   # ← e aqui
 ]
 ```
@@ -270,21 +268,20 @@ ganha as suas linhas no `/smoke-api`, que sobe o perfil `api`.
 
 ### 1.10 Testes — `tests/test_product.py`
 
-Copie `tests/test_item.py`. As fixtures prontas são `client`, `login`, `headers`,
-`make_user`, `set_role` e `sql_log` — `login` e `make_user` aceitam `role=Role.GERENTE`, e
+Copie `tests/test_vehicle.py`. As fixtures prontas são `client`, `login`, `headers`,
+`make_user`, `set_role` e `sql_log` — `login` e `make_user` aceitam `role=Role.ADMIN`, e
 `set_role(nome, papel)` troca o papel de quem já existe, sem reemitir o token.
 
 Cubra pelo menos: criação, listagem paginada, conflito de nome duplicado, exclusão lógica
-sumindo das consultas, e **recurso de outro usuário respondendo 404**. Se alguma operação
-exigir permissão que algum papel não tem, cubra também o **403** em **cada** operação de
-escrita, com o `leitor`, o papel somente-leitura que a base traz. Na criação, entre com
-`login(role=Role.LEITOR)`; nas escritas sobre um registro que já existe (PATCH, DELETE), crie
-como `usuario` e rebaixe com `set_role(nome, Role.LEITOR)` (molde em `tests/test_authz.py`).
-O `@permission_required` de escrita esquecido reprova em
-`test_toda_escrita_protegida_declara_a_propria_permissao` (`tests/test_contracts.py`), que só
-confere que o método declara *uma* permissão; o 403 de quem lê e não escreve prova que é a
-certa. Recurso que o `leitor` nem lê (o `Vehicle`) usa outro papel sem a escrita, a `silver`,
-mas aí o 403 sai do piso da classe e só o teste de contrato protege a escrita.
+sumindo das consultas, e **recurso de outro usuário respondendo 404**. Cubra também o **403**
+em **cada** operação de escrita, com a `silver`, que não tem nenhuma permissão de negócio: na
+criação, entre com `login(role=Role.SILVER)`; nas escritas sobre um registro que já existe
+(PATCH, DELETE), crie como `usuario` e rebaixe com `set_role(nome, Role.SILVER)` (molde em
+`tests/test_vehicle.py`). Esse 403 sai do piso da classe. O `@permission_required` de escrita
+esquecido reprova em `test_toda_escrita_protegida_declara_a_propria_permissao`
+(`tests/test_contracts.py`), que só confere que o método declara *uma* permissão. Quem prova que
+é a certa é um teste que restringe o mapa ao papel que só lê, com `monkeypatch.setitem` em
+`ROLE_PERMISSIONS` (molde: `test_quem_so_le_o_veiculo_nao_escreve_nada`, em `tests/test_authz.py`).
 
 ---
 
@@ -293,22 +290,22 @@ mas aí o 403 sai do piso da classe e só o teste de contrato protege a escrita.
 Numa entidade que já existe, acrescente um método à classe de rota:
 
 ```python
-@blp.route("/<int:item_id>/arquivar")
-class ItemArquivar(ItemView):          # herda decorators e o serviço injetado
-    @permission_required(Permission.ITEM_ESCREVER)   # arquivar é escrita
-    @blp.response(200, ItemSchema)
+@blp.route("/<int:vehicle_id>/arquivar")
+class VehicleArquivar(VehicleView):    # herda decorators e o serviço injetado
+    @permission_required(Permission.VEICULO_ESCREVER)   # arquivar é escrita
+    @blp.response(200, VehicleSchema)
     @error_responses(blp, 403, 404, 422)
-    def post(self, item_id: int):
-        """Arquiva um item."""
-        return self.item_service.arquivar(
-            item_id, current_owner_scope(Permission.ITEM_ESCREVER_DE_TODOS)
+    def post(self, vehicle_id: int):
+        """Arquiva um veículo."""
+        return self.vehicle_service.arquivar(
+            vehicle_id, current_owner_scope(Permission.VEICULO_ESCREVER_DE_TODOS)
         )
 ```
 
 A lógica do `arquivar` vai no **serviço**, não aqui. O endpoint herda o piso de permissão
 da classe base; como é escrita, acrescenta a sua — ver a [receita 10](#10-autorização). E
-ganha o seu teste de 403: o dono, rebaixado a `leitor` com `set_role`, não arquiva (como nas
-escritas da receita 1.10). Sem esse teste, esquecer o decorator passa no CI.
+entra no teste do papel que só lê (como as escritas da receita 1.10): sem ele, declarar a
+permissão errada passa no CI.
 
 ---
 
@@ -318,7 +315,7 @@ Consulta que o CRUD genérico não cobre entra como método no **repositório** 
 `app/repository/sql/`), nunca no serviço:
 
 ```python
-class ItemRepository(BaseRepository[Item]):
+class VehicleRepository(BaseRepository[Vehicle]):
     def contar_por_dono(self, owner_id: int) -> int:
         stmt = db.select(func.count()).select_from(self.model).where(
             self.model.owner_id == owner_id,
@@ -337,18 +334,18 @@ Use `self._select()` como ponto de partida quando quiser o filtro de exclusão l
 Sobrescreva um gancho no serviço. Três disponíveis:
 
 ```python
-class ItemService(BaseService[Item]):
+class ProductService(BaseService[Product]):
     def before_create(self, data: dict) -> None:
         """Dados já validados pelo schema, antes de instanciar o modelo."""
-        data["name"] = self._clean_text(data.get("name"), "nome do item")
+        data["name"] = self._clean_text(data.get("name"), "nome do produto")
 
-    def before_update(self, model: Item, changes: dict) -> None:
+    def before_update(self, model: Product, changes: dict) -> None:
         """Modelo carregado e os campos que vão mudar."""
 
-    def before_delete(self, model: Item) -> None:
+    def before_delete(self, model: Product) -> None:
         """Levante para bloquear a exclusão."""
         if model.tem_pedidos_ativos:
-            raise BusinessRuleError("Item com pedidos ativos não pode ser excluído.")
+            raise BusinessRuleError("Produto com pedidos ativos não pode ser excluído.")
 ```
 
 `_clean_text` vem do `BaseService`: apara as pontas e levanta `BusinessRuleError` se
@@ -402,16 +399,16 @@ quantidade: Mapped[int] = mapped_column(default=0, server_default=text("0"))
 
 ```bash
 # 2. migração
-docker compose exec api alembic revision --autogenerate -m "item.quantidade"
+docker compose exec api alembic revision --autogenerate -m "product.quantidade"
 ```
 
 Revise o arquivo gerado. **Coluna `NOT NULL` em tabela com dados precisa de
 `server_default`**, senão o `ALTER TABLE` falha.
 
 ```python
-# 3. app/schemas/item_schema.py — o campo só aparece na API se entrar aqui
-quantidade = fields.Int()                                      # em ItemSchema (saída)
-quantidade = fields.Int(load_default=0, validate=validate.Range(min=0))  # em ItemCreateSchema
+# 3. app/schemas/product_schema.py — o campo só aparece na API se entrar aqui
+quantidade = fields.Int()                                      # em ProductSchema (saída)
+quantidade = fields.Int(load_default=0, validate=validate.Range(min=0))  # em ProductCreateSchema
 ```
 
 ```bash
@@ -505,14 +502,14 @@ def init_app(app: Flask) -> None:
 @click.command("recalcular-totais")
 @with_appcontext
 def recalcular_totais() -> None:
-    """Recalcula os totais de todos os itens."""
-    service = current_app.container.item_service()
+    """Recalcula os totais de todos os produtos."""
+    service = current_app.container.product_service()
     ...
     click.echo("Pronto.")
 
 
 def init_app(app: Flask) -> None:
-    for command in (create_db, drop_db, create_user, set_role, recalcular_totais):  # ← aqui
+    for command in (create_db, drop_db, ..., prune_tokens, recalcular_totais):  # ← aqui
         app.cli.add_command(command)
 ```
 
@@ -656,7 +653,7 @@ class Permission(StrEnum):
     ...
     PRODUCT_ESCREVER = "product:escrever"
 
-_USUARIO = _LEITOR | {..., Permission.PRODUCT_ESCREVER}
+_USUARIO = frozenset({..., Permission.PRODUCT_ESCREVER})
 ```
 
 Esquecer o passo 2 **reprova** em `tests/test_contracts.py`: a permissão órfã deixaria a
@@ -673,14 +670,14 @@ banco.
 
 1. O membro em `Role` (`app/domain/authz.py`).
 2. A entrada em `ROLE_PERMISSIONS`, de preferência a partir de um papel existente
-   (`_REVISOR = _USUARIO | {Permission.ITEM_LER_DE_TODOS}`). Papel que não estende nenhum
+   (`_REVISOR = _USUARIO | {Permission.VEICULO_LER_DE_TODOS}`). Papel que não estende nenhum
    (uma conta de sistema, como a `silver`) é um ramo à parte, com o próprio `frozenset`.
 3. **A migração que troca a restrição `CHECK`**, porque o banco recusa um valor que não
    está nela:
 
    ```python
    # migrations/versions/000X_papel_revisor.py  (molde real: 0002_papel_silver.py)
-   PAPEIS = ("leitor", "usuario", "revisor", "gerente", "admin", "silver")
+   PAPEIS = ("usuario", "revisor", "admin", "silver")
 
    def upgrade() -> None:
        valores = ", ".join(f"'{p}'" for p in PAPEIS)
@@ -893,6 +890,6 @@ E confira:
       contrato vai direto para a DLQ (02-decisoes, "O destino de cada mensagem").
 - [ ] Teste cobrindo acesso de outro usuário (deve ser **404**) e, se a rota exige uma
       permissão que algum papel não tem, acesso sem ela em cada operação (deve ser **403** —
-      `login(role=Role.LEITOR)` na criação; nas escritas sobre registro existente, rebaixe o
-      dono com `set_role`).
+      `login(role=Role.SILVER)` na criação; nas escritas sobre registro existente, rebaixe o
+      dono com `set_role`), e o papel que só lê em cada escrita (`tests/test_authz.py`).
 - [ ] Nenhum segredo em arquivo versionado.

@@ -1,4 +1,4 @@
-"""Schemas de veículos (os cinco da receita, no molde de `item_schema.py`)."""
+"""Schemas de veículos (os cinco da receita)."""
 
 from marshmallow import Schema, ValidationError, fields, validate, validates_schema
 

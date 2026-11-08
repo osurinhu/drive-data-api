@@ -16,14 +16,14 @@ from flask import Flask
 
 from messaging.publisher import RabbitTelemetryPublisher
 from repository.mongo.bronze_reader import MongoBronzeReader
-from repository.sql.item_repository import ItemRepository
+from repository.sql.refresh_token_repository import RefreshTokenRepository
 from repository.sql.user_repository import UserRepository
 from repository.sql.vehicle_driver_repository import VehicleDriverRepository
 from repository.sql.vehicle_repository import VehicleRepository
 from service.auth_service import AuthService
-from service.item_service import ItemService
 from service.telemetry.bronze_read_service import BronzeReadService
 from service.telemetry.ingest_service import TelemetryIngestService
+from service.token_service import TokenService
 from service.user_service import UserService
 from service.vehicle_driver_service import VehicleDriverService
 from service.vehicle_service import VehicleService
@@ -40,7 +40,7 @@ class Container(containers.DeclarativeContainer):
 
     # --- Repositories ---------------------------------------------------------
     user_repository = providers.Factory(UserRepository)
-    item_repository = providers.Factory(ItemRepository)
+    refresh_token_repository = providers.Factory(RefreshTokenRepository)
     vehicle_repository = providers.Factory(VehicleRepository)
     vehicle_driver_repository = providers.Factory(VehicleDriverRepository)
 
@@ -60,9 +60,11 @@ class Container(containers.DeclarativeContainer):
     bronze_reader = providers.Factory(MongoBronzeReader, timeout=config.bronze.read_timeout)
 
     # --- Services -------------------------------------------------------------
-    user_service = providers.Factory(UserService, repository=user_repository)
+    user_service = providers.Factory(
+        UserService, repository=user_repository, tokens=refresh_token_repository
+    )
     auth_service = providers.Factory(AuthService, repository=user_repository)
-    item_service = providers.Factory(ItemService, repository=item_repository)
+    token_service = providers.Factory(TokenService, repository=refresh_token_repository)
     vehicle_service = providers.Factory(
         VehicleService, repository=vehicle_repository, drivers=vehicle_driver_repository
     )
@@ -107,5 +109,5 @@ def init_app(app: Flask) -> None:
     # (API_V1_ROUTES do perfil), e só delas.
     container.wire(modules=list(app.config["API_V1_ROUTES"]))
     # No app, para acesso em comandos CLI e testes
-    # (app.container.item_service.override(...)).
+    # (app.container.vehicle_service.override(...)).
     app.container = container

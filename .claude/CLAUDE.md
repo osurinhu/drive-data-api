@@ -16,7 +16,7 @@ Siga o idioma do arquivo vizinho.
   checklist de revisão. Toda implementação.
 - `README.md` — runbook: subir, testar, migrar, configurar.
 
-Molde real: os arquivos de `Item` (modelo, repositório, serviço, schemas, rota, testes) — os
+Molde real: os arquivos de `Vehicle` (modelo, repositório, serviço, schemas, rota, testes) — os
 trechos da documentação são resumidos. As regras de cada camada estão em `.claude/rules/` e
 carregam sozinhas quando você lê ou edita arquivos daquela camada.
 
@@ -55,7 +55,7 @@ carregam sozinhas quando você lê ou edita arquivos daquela camada.
 
 ## Fluxo de trabalho
 
-1. Ache a receita em `documentacao/03-como-estender.md` e o molde em `Item`.
+1. Ache a receita em `documentacao/03-como-estender.md` e o molde em `Vehicle`.
 2. Implemente seguindo as regras da camada.
 3. `/verificar testes <arquivo>` para iterar; `/verificar` (tudo) antes de concluir. Mudou
    rota, autenticação, configuração, Docker ou migração? Rode também o `/smoke-api`. Mudou o

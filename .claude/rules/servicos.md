@@ -7,7 +7,7 @@ paths:
 
 Regra de negócio, validação semântica, ownership e transação. **Não pode:** tocar no ORM
 (`db.session`, `select`) nem saber o que é HTTP (status, header, `request`, `abort`); fala com o
-banco só pelo repositório. Molde: `app/service/item_service.py`; base:
+banco só pelo repositório. Molde: `app/service/vehicle_service.py`; base:
 `app/service/base_service.py`. Receitas: 03-como-estender §1.4, §4 e §5.
 
 - `class XService(BaseService[X])` com `conflict_message` e `not_found_message` (as mensagens do
@@ -16,7 +16,8 @@ banco só pelo repositório. Molde: `app/service/item_service.py`; base:
   `domain.authz`, com a sentinela `ANY_OWNER`) explícito, **sem default**: um default "sem
   filtro" vira vazamento no primeiro esquecimento (02-decisoes, "Escopo de ownership por
   chamada"). Operação nova carrega o registro com `self.get_by_id(id, owner_scope)`, que já
-  devolve 404 para recurso de outro dono. A exceção é a outra ponta de um sub-recurso (abaixo).
+  devolve 404 para recurso de outro dono. As exceções são a outra ponta de um sub-recurso (abaixo)
+  e o `TokenService`, em que o `jti` é a própria credencial.
 - Regras entram pelos ganchos `before_create(data)`, `before_update(model, changes)` e
   `before_delete(model)`. Texto obrigatório: `self._clean_text(valor, "nome do x")` — o schema
   barra `""`, o serviço barra `"   "` e também protege a CLI, que não passa por schema.

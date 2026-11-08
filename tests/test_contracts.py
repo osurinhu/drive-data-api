@@ -55,7 +55,7 @@ def test_envelope_de_paginacao_do_servico_e_do_schema_nao_divergem():
     desaparecer da resposta sem nenhum erro."""
     campos_do_servico = {f.name for f in fields(Page)}
     # PageSchema traz só os metadados; `items` é declarado nas subclasses
-    # concretas (ex. ItemPageSchema), porque o tipo do item varia.
+    # concretas (ex. VehiclePageSchema), porque o tipo do item varia.
     campos_do_schema = set(PageSchema().fields) | {"items"}
 
     assert campos_do_servico == campos_do_schema
@@ -118,6 +118,13 @@ ROTAS_PUBLICAS = {
     ("GET", "/api/v1/health/"),
     ("GET", "/api/v1/health/live"),
     ("POST", "/api/v1/auth/token"),
+    ("POST", "/api/v1/auth/register"),
+}
+
+#: As únicas operações que aceitam o token de renovação no lugar do de acesso.
+ROTAS_DE_RENOVACAO = {
+    ("POST", "/api/v1/auth/refresh"),
+    ("POST", "/api/v1/auth/logout"),
 }
 
 
@@ -182,6 +189,23 @@ def test_toda_rota_protegida_declara_a_permissao_que_exige(app):
 
 
 VERBOS_DE_ESCRITA = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def test_so_renovar_e_encerrar_a_sessao_aceitam_o_token_de_renovacao(app):
+    """Falhou? Uma rota nova usa `@refresh_token_required`. O decorator não exige
+    permissão nenhuma e o teste seguinte o aceita como declaração: numa rota de
+    negócio, ele abriria a escrita a qualquer sessão."""
+    encontradas = set()
+    for regra in app.url_map.iter_rules():
+        classe = getattr(app.view_functions[regra.endpoint], "view_class", None)
+        if classe is None:
+            continue
+        for verbo in regra.methods or set():
+            metodo = getattr(classe, verbo.lower(), None)
+            if getattr(metodo, "__token_de_renovacao__", False):
+                encontradas.add((verbo, regra.rule))
+
+    assert encontradas == ROTAS_DE_RENOVACAO
 
 
 def test_toda_escrita_protegida_declara_a_propria_permissao(app):

@@ -9,10 +9,10 @@ from dependency_injector import providers
 
 from service.pagination import Page
 
-ITEM_URL = "/api/v1/item/"
+VEHICLE_URL = "/api/v1/vehicle/"
 
 
-class FakeItemService:
+class FakeVehicleService:
     """Dublê: não conhece banco nenhum."""
 
     def get_page(self, _owner_scope, **_kwargs) -> Page:
@@ -27,16 +27,16 @@ class FakeItemService:
 
 
 def test_container_permite_substituir_o_servico_por_um_duble(app, client, headers):
-    with app.container.item_service.override(providers.Object(FakeItemService())):
-        body = client.get(ITEM_URL, headers=headers).get_json()
+    with app.container.vehicle_service.override(providers.Object(FakeVehicleService())):
+        body = client.get(VEHICLE_URL, headers=headers).get_json()
 
     assert body["total_of_items"] == 99
 
 
 def test_substituicao_e_desfeita_ao_sair_do_contexto(app, client, headers):
-    with app.container.item_service.override(providers.Object(FakeItemService())):
+    with app.container.vehicle_service.override(providers.Object(FakeVehicleService())):
         pass
 
-    body = client.get(ITEM_URL, headers=headers).get_json()
+    body = client.get(VEHICLE_URL, headers=headers).get_json()
 
     assert body["total_of_items"] == 0

@@ -9,7 +9,7 @@ paths:
 # Modelos e migrações (o ORM de `app/domain/`, `migrations/`)
 
 O modelo mapeia tabela para classe. **Não pode:** conter regra de negócio nem mixin de
-serialização. Molde: `Item` em `app/domain/models.py`. Receitas: 03-como-estender §1.1, §1.2,
+serialização. Molde: `Vehicle` em `app/domain/models.py`. Receitas: 03-como-estender §1.1, §1.2,
 §6 e §10.3; decisões em 02-decisoes, seção Dados.
 
 - Herde `BaseModel`: `id`, `created_at`, `last_update` (TIMESTAMPTZ) e `deleted` já vêm dele.

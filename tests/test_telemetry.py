@@ -203,9 +203,8 @@ def test_broker_parado_responde_503_com_retry_after(app, client, headers):
     assert response.get_json()["request_id"]
 
 
-@pytest.mark.parametrize("papel", [Role.SILVER, Role.LEITOR])
-def test_papel_sem_telemetria_enviar_recebe_403(client, login, fila, papel):
-    _, headers = login("etl", role=papel)
+def test_papel_sem_telemetria_enviar_recebe_403(client, login, fila):
+    _, headers = login("etl", role=Role.SILVER)
 
     response = client.post(URL, json={"records": [_registro()]}, headers=headers)
 

@@ -26,7 +26,7 @@ Modos:
   tudo (padrão)   ruff check, ruff format --check, mypy, migrações e pytest
   estatico        ruff check, ruff format --check e mypy (não precisa de banco)
   testes [args]   só o pytest; os argumentos são repassados
-                  ex.: testes tests/test_item.py -k conflito
+                  ex.: testes tests/test_vehicle.py -k vin
   migracoes       upgrade head -> check -> downgrade base num banco descartável
   medir [args]    roda a medição temporária tests/test_zz_medir.py e mostra a
                   saída inteira, mesmo quando passa (ver /medir-consultas)

@@ -18,7 +18,7 @@
 [default]
 
 # --- Identidade e documentação da API ----------------------------------------
-API_TITLE = "Base API"
+API_TITLE = "Drive Data API"
 API_VERSION = "v1"
 OPENAPI_VERSION = "3.0.3"
 OPENAPI_URL_PREFIX = "/api/v1"
@@ -114,8 +114,13 @@ HEALTH_CRITICAL = ["database"]
 HEALTH_PROBE_TIMEOUT_SECONDS = 2
 
 # --- Autenticação -------------------------------------------------------------
-# 3600s = 1h. Os projetos de origem usavam 48h, longo demais para um padrão.
-JWT_ACCESS_TOKEN_EXPIRES = 3600
+# 15 min: é o tempo que um token de acesso continua valendo depois do logout. A sessão
+# longa do app mobile fica com o token de renovação (30 dias), que gira a cada uso e é
+# revogável, e o `iss` amarra os dois à emissão desta aplicação.
+JWT_ACCESS_TOKEN_EXPIRES = 900
+JWT_REFRESH_TOKEN_EXPIRES = 2592000
+JWT_ENCODE_ISSUER = "drive-data"
+JWT_DECODE_ISSUER = "drive-data"
 
 # --- CORS ---------------------------------------------------------------------
 # Restrinja para os domínios do seu frontend antes de ir para produção.
@@ -155,7 +160,7 @@ EXTENSIONS = [
 API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
-    "blueprint.restapi.v1.item",
+    "blueprint.restapi.v1.registration",
     "blueprint.restapi.v1.vehicle",
     "blueprint.restapi.v1.vehicle_driver",
     "blueprint.restapi.v1.telemetry",
@@ -188,7 +193,7 @@ EXTENSIONS = [
 API_V1_ROUTES = [
     "blueprint.restapi.v1.health",
     "blueprint.restapi.v1.auth",
-    "blueprint.restapi.v1.item",
+    "blueprint.restapi.v1.registration",
     "blueprint.restapi.v1.vehicle",
     "blueprint.restapi.v1.vehicle_driver",
     "blueprint.restapi.v1.telemetry",
