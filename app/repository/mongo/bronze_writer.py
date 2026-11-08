@@ -1,25 +1,18 @@
 """O bronze do lado de quem grava (consumer): o adaptador do ``BronzeWriter``."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
-from pymongo.errors import BulkWriteError
-from pymongo.write_concern import WriteConcern
-
-from domain.ports import BronzeEntry, BronzeUnavailable
+from domain.ports import BronzeEntry
 from ext.mongo import mongo
-from repository.mongo.bronze_document import RECORDS, to_document
-from repository.mongo.server import operation, server_time
-
-#: O código de erro do Mongo para chave duplicada.
-DUPLICATE_KEY = 11000
-
-#: Confirmada pela maioria do replica set e no journal: o registro que o consumer
-#: confirmou ao broker não some numa troca de primário. Num nó só (o compose), vale
-#: como a confirmação do próprio nó.
-DURABLE = WriteConcern(w="majority", j=True)
+from repository.mongo.bronze_document import RECORDS, SENDER_PROJECTION, sender_of, to_document
+from repository.mongo.server import (
+    DURABLE,
+    insert_skipping_duplicates,
+    operation,
+    server_time,
+)
 
 
 class MongoBronzeWriter:
@@ -46,28 +39,15 @@ class MongoBronzeWriter:
         if not entries:
             return set()
         collection = mongo.db.get_collection(RECORDS, write_concern=DURABLE)
+        refused = insert_skipping_duplicates(
+            collection, [to_document(entry) for entry in entries], timeout=self._timeout
+        )
+        return {entries[position].record_id for position in refused}
+
+    def senders_of(self, record_ids: Collection[UUID]) -> dict[UUID, int]:
+        if not record_ids:
+            return {}
+        query = {"_id": {"$in": [str(record_id) for record_id in record_ids]}}
         with operation(self._timeout):
-            try:
-                collection.insert_many([to_document(entry) for entry in entries], ordered=False)
-            except BulkWriteError as error:
-                if error.details.get("writeConcernErrors"):
-                    # Gravou, sem a confirmação da maioria: repetir é seguro (idempotente).
-                    raise BronzeUnavailable("writeConcernError") from error
-                duplicates = _duplicates(entries, error.details)
-                if duplicates is None:
-                    # Outro erro de escrita: o `operation` o classifica.
-                    raise
-                return duplicates
-        return set()
-
-
-def _duplicates(entries: Sequence[BronzeEntry], details: Mapping[str, Any]) -> set[UUID] | None:
-    """Os ids recusados por chave duplicada, ou ``None`` se algum erro for de outro tipo.
-
-    Com ``ordered=False``, o Mongo grava todos os que pode e lista os recusados pelo
-    índice na lista enviada.
-    """
-    write_errors = details.get("writeErrors", [])
-    if any(error.get("code") != DUPLICATE_KEY for error in write_errors):
-        return None
-    return {entries[error["index"]].record_id for error in write_errors}
+            documents = list(mongo.db[RECORDS].find(query, SENDER_PROJECTION))
+        return dict(sender_of(document) for document in documents)

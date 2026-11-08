@@ -248,10 +248,32 @@ def _com_leitura(**campos) -> dict:
         pytest.param({"records": [{**_registro(), "readings": []}]}, id="sem leituras"),
         pytest.param({"records": [_com_leitura(metric="RPM")]}, id="métrica fora do padrão"),
         pytest.param({"records": [_com_leitura(unit="u" * 17)]}, id="unidade longa"),
+        pytest.param({"records": [_com_leitura(available="true")]}, id="available em texto"),
+        pytest.param({"records": [_com_leitura(value="1065.0")]}, id="valor em texto"),
+        pytest.param({"records": [_com_leitura(value=None)]}, id="disponível sem valor"),
     ],
 )
 def test_formato_invalido_reprova_o_lote_inteiro(client, headers, fila, corpo):
     response = client.post(URL, json=corpo, headers=headers)
 
     assert response.status_code == 422, response.get_json()
+    assert fila.publicados == []
+
+
+def test_id_repetido_no_lote_reprova_o_lote_inteiro(client, headers, fila):
+    registro = _registro()
+
+    response = client.post(URL, json={"records": [registro, registro]}, headers=headers)
+
+    assert response.status_code == 422, response.get_json()
+    assert fila.publicados == []
+
+
+def test_corpo_acima_do_limite_responde_413(client, headers, fila):
+    corpo = b'{"records":"' + b"x" * (1024 * 1024) + b'"}'
+
+    response = client.post(URL, data=corpo, content_type="application/json", headers=headers)
+
+    assert response.status_code == 413
+    assert response.get_json()["code"] == 413
     assert fila.publicados == []

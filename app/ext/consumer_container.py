@@ -12,6 +12,7 @@ from flask import Flask
 
 from messaging.consumer import RabbitTelemetryConsumer
 from repository.mongo.bronze_writer import MongoBronzeWriter
+from repository.mongo.rejection_log import MongoRejectionLog
 from service.telemetry.bronze_ingest_service import BronzeIngestService
 
 
@@ -21,7 +22,10 @@ class ConsumerContainer(containers.DeclarativeContainer):
     config = providers.Configuration()
 
     bronze_writer = providers.Factory(MongoBronzeWriter, timeout=config.bronze.write_timeout)
-    bronze_ingest_service = providers.Factory(BronzeIngestService, writer=bronze_writer)
+    rejection_log = providers.Factory(MongoRejectionLog, timeout=config.bronze.write_timeout)
+    bronze_ingest_service = providers.Factory(
+        BronzeIngestService, writer=bronze_writer, rejections=rejection_log
+    )
 
     # Factory: o consumidor guarda a conexão do próprio `run`, e cada `flask consumer
     # run` é um processo.

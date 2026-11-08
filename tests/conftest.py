@@ -417,7 +417,7 @@ def fila_em_memoria():
 class LeituraEmMemoria:
     """Dublê do ``BronzeReader``, com a semântica do adaptador: a ordem
     ``(ingested_at, record_id)``, o começo estritamente depois da posição, o limite
-    superior inclusivo e o filtro do escopo de dono.
+    superior inclusivo, o escopo de dono e os filtros.
 
     ``agora`` é a hora do servidor (com milissegundos, como a data BSON); ``gravar``
     guarda um registro gravado há tantos segundos; ``fora`` faz o bronze falhar como
@@ -430,18 +430,25 @@ class LeituraEmMemoria:
         self.chamadas: list[dict] = []
         self.fora = False
 
-    def gravar(self, ingerido_ha: float, *, user_id: int = 51) -> BronzeEntry:
+    def gravar(
+        self,
+        ingerido_ha: float,
+        *,
+        user_id: int = 51,
+        vin: str = "93YBSR7RHEJ298116",
+        metricas: tuple[str, ...] = ("rpm",),
+    ) -> BronzeEntry:
         ingested_at = self.agora - timedelta(seconds=ingerido_ha)
         record_id = uuid4()
         registro = BronzeEntry(
             record_id=record_id,
-            vin="93YBSR7RHEJ298116",
+            vin=vin,
             vehicle_id=7,
             user_id=user_id,
             sender_relation="owner",
             payload_user_matches_sender=True,
             collected_at=ingested_at - timedelta(minutes=2),
-            available_metrics=("rpm",),
+            available_metrics=metricas,
             received_at=ingested_at - timedelta(seconds=1),
             ingested_at=ingested_at,
             message_id=uuid4(),
@@ -457,10 +464,18 @@ class LeituraEmMemoria:
             raise BronzeUnavailable("Mongo fora do ar (dublê)")
         return self.agora
 
-    def read_after(self, after, *, until, limit, owner_scope) -> list[BronzeEntry]:
+    def read_after(self, after, *, until, limit, owner_scope, filters) -> list[BronzeEntry]:
         if self.fora:
             raise BronzeUnavailable("Mongo fora do ar (dublê)")
-        self.chamadas.append({"after": after, "until": until, "limit": limit, "dono": owner_scope})
+        self.chamadas.append(
+            {
+                "after": after,
+                "until": until,
+                "limit": limit,
+                "dono": owner_scope,
+                "filtros": filters,
+            }
+        )
 
         def ordem(registro: BronzeEntry):
             return (registro.ingested_at, str(registro.record_id))
@@ -471,6 +486,10 @@ class LeituraEmMemoria:
             if ordem(registro) > (after.ingested_at, str(after.record_id))
             and registro.ingested_at <= until
             and (owner_scope is ANY_OWNER or registro.user_id == owner_scope)
+            and (filters.vin is None or registro.vin == filters.vin)
+            and (not filters.metrics or set(filters.metrics) & set(registro.available_metrics))
+            and (filters.collected_from is None or registro.collected_at >= filters.collected_from)
+            and (filters.collected_to is None or registro.collected_at <= filters.collected_to)
         ]
         return sorted(depois, key=ordem)[:limit]
 

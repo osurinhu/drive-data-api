@@ -221,5 +221,26 @@ confere(
 tudo, _, _ = ler(silver, limit=1000)
 confere(len(tudo or []) == 4, "relendo do começo: 4 registros no bronze", len(tudo or []))
 
+RECORDS = f"{BRONZE_API}/bronze/records"
+codigo, por_vin = chamar("GET", f"{RECORDS}?vin={VIN.lower()}&metric=rpm&limit=1000", token=silver)
+confere(
+    codigo == 200 and len(por_vin["items"]) == 4,
+    f"{codigo}  filtro por VIN (em minúsculas) e métrica: os 4 registros",
+    por_vin,
+)
+codigo, sem_nada = chamar("GET", f"{RECORDS}?metric=nao_existe&limit=1000", token=silver)
+confere(
+    codigo == 200 and sem_nada["items"] == [],
+    f"{codigo}  filtro por métrica que ninguém enviou: página vazia",
+    sem_nada,
+)
+status(
+    422,
+    "o cursor de um filtro não serve para outro",
+    "GET",
+    f"{RECORDS}?metric=speed&cursor={por_vin.get('next_cursor')}",
+    token=silver,
+)
+
 print(f"RESUMO: {total - falhas} de {total}")
 sys.exit(1 if falhas else 0)

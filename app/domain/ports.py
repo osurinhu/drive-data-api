@@ -108,6 +108,47 @@ class BronzeWriter(Protocol):
         estavam (``record_id``), que ficam como estão. Levanta ``BronzeUnavailable``."""
         ...
 
+    def senders_of(self, record_ids: Collection[UUID]) -> dict[UUID, int]:
+        """Quem enviou cada registro já gravado (o ``user_id``). O id que não está no
+        bronze fica fora do dicionário. Levanta ``BronzeUnavailable``."""
+        ...
+
+
+class BronzeRejectionReason(StrEnum):
+    """Por que o consumer não gravou um registro no bronze."""
+
+    #: O VIN do envelope não está na forma canônica ou não segue o formato: o producer
+    #: nunca o publicaria, então é bug ou versão divergente.
+    INVALID_VIN = "invalid_vin"
+    #: O ``id`` já está no bronze, enviado por outro usuário.
+    ID_COLLISION = "id_collision"
+
+
+@dataclass(frozen=True, slots=True)
+class BronzeRejection:
+    """Um registro que o consumer recusou, com o que se precisa para investigá-lo."""
+
+    record_id: UUID
+    vin: str
+    user_id: int
+    reason: BronzeRejectionReason
+    message_id: UUID
+    request_id: str | None
+    received_at: datetime
+    #: O relógio do servidor do bronze, como o ``ingested_at``.
+    rejected_at: datetime
+    schema_version: int
+    raw: dict[str, Any]
+
+
+class RejectionLog(Protocol):
+    """Onde fica o rastro do que o consumer recusou."""
+
+    def record(self, rejections: Sequence[BronzeRejection]) -> None:
+        """Guarda as recusas; a mesma recusa, da mesma mensagem, fica uma vez só. Levanta
+        ``BronzeUnavailable``."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class BronzePosition:
@@ -123,6 +164,36 @@ class BronzePosition:
 BRONZE_START = BronzePosition(ingested_at=datetime(1970, 1, 1, tzinfo=UTC), record_id=UUID(int=0))
 
 
+def position_at(moment: datetime) -> BronzePosition:
+    """Logo antes do primeiro registro gravado em ``moment``: é de onde começa a leitura
+    por data de gravação."""
+    return BronzePosition(ingested_at=moment, record_id=BRONZE_START.record_id)
+
+
+@dataclass(frozen=True, slots=True)
+class BronzeFilters:
+    """O recorte de uma leitura do bronze. Campo vazio não restringe."""
+
+    #: Na forma canônica (``domain.vin.normalize_vin``).
+    vin: str | None = None
+    #: Casa o registro com leitura disponível de ao menos uma destas métricas.
+    metrics: tuple[str, ...] = ()
+    collected_from: datetime | None = None
+    collected_to: datetime | None = None
+
+
+#: A leitura do bronze inteiro.
+NO_FILTERS = BronzeFilters()
+
+
+@dataclass(frozen=True, slots=True)
+class BronzeCursor:
+    """De onde continuar uma leitura: a posição só vale para o mesmo recorte."""
+
+    position: BronzePosition
+    filters: BronzeFilters
+
+
 class BronzeReader(Protocol):
     """O bronze, do lado de quem lê (a API da silver)."""
 
@@ -132,10 +203,16 @@ class BronzeReader(Protocol):
         ...
 
     def read_after(
-        self, after: BronzePosition, *, until: datetime, limit: int, owner_scope: OwnerScope
+        self,
+        after: BronzePosition,
+        *,
+        until: datetime,
+        limit: int,
+        owner_scope: OwnerScope,
+        filters: BronzeFilters,
     ) -> list[BronzeEntry]:
         """Até ``limit`` registros depois de ``after``, na ordem ``(ingested_at,
-        record_id)``, com ``ingested_at`` até ``until`` (inclusive). Com um id de
-        usuário em ``owner_scope``, só os que ele enviou (``user_id``); com
-        ``ANY_OWNER``, os de todos. Levanta ``BronzeUnavailable``."""
+        record_id)``, com ``ingested_at`` até ``until`` (inclusive), dentro de
+        ``filters``. Com um id de usuário em ``owner_scope``, só os que ele enviou
+        (``user_id``); com ``ANY_OWNER``, os de todos. Levanta ``BronzeUnavailable``."""
         ...

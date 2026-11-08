@@ -12,7 +12,14 @@ from uuid import UUID, uuid4
 import pytest
 
 from domain.authz import ANY_OWNER
-from domain.ports import BRONZE_START, BronzeEntry, BronzePosition, BronzeUnavailable
+from domain.ports import (
+    BRONZE_START,
+    NO_FILTERS,
+    BronzeEntry,
+    BronzeFilters,
+    BronzePosition,
+    BronzeUnavailable,
+)
 from repository.mongo import indexes
 from repository.mongo.bronze_document import RECORDS
 from repository.mongo.bronze_reader import ORDER, MongoBronzeReader, page_query
@@ -21,19 +28,29 @@ from repository.mongo.bronze_writer import MongoBronzeWriter
 #: Milissegundos: a precisão da data BSON.
 T0 = datetime(2026, 11, 7, 14, 0, 0, 482000, tzinfo=UTC)
 DEPOIS_DE_TUDO = T0 + timedelta(days=1)
+VIN = "93YBSR7RHEJ298116"
+OUTRO_VIN = "9BWZZZ377VT004251"
 
 
-def _registro(ingested_at: datetime, *, user_id: int = 51, record_id: UUID | None = None):
+def _registro(
+    ingested_at: datetime,
+    *,
+    user_id: int = 51,
+    record_id: UUID | None = None,
+    vin: str = VIN,
+    metricas: tuple[str, ...] = ("rpm",),
+    coletado: datetime | None = None,
+):
     record_id = record_id or uuid4()
     return BronzeEntry(
         record_id=record_id,
-        vin="93YBSR7RHEJ298116",
+        vin=vin,
         vehicle_id=7,
         user_id=user_id,
         sender_relation="owner",
         payload_user_matches_sender=True,
-        collected_at=ingested_at - timedelta(minutes=2),
-        available_metrics=("rpm",),
+        collected_at=coletado or ingested_at - timedelta(minutes=2),
+        available_metrics=metricas,
         received_at=ingested_at - timedelta(seconds=1),
         ingested_at=ingested_at,
         message_id=uuid4(),
@@ -67,8 +84,18 @@ def reader():
     return MongoBronzeReader(timeout=5)
 
 
-def _ler(reader, after=BRONZE_START, *, until=DEPOIS_DE_TUDO, limit=100, owner_scope=ANY_OWNER):
-    return reader.read_after(after, until=until, limit=limit, owner_scope=owner_scope)
+def _ler(
+    reader,
+    after=BRONZE_START,
+    *,
+    until=DEPOIS_DE_TUDO,
+    limit=100,
+    owner_scope=ANY_OWNER,
+    filters=NO_FILTERS,
+):
+    return reader.read_after(
+        after, until=until, limit=limit, owner_scope=owner_scope, filters=filters
+    )
 
 
 def test_le_o_que_o_writer_gravou_campo_a_campo(gravar, reader):
@@ -131,6 +158,80 @@ def test_o_escopo_de_dono_filtra_pelo_remetente(gravar, reader):
     assert _ler(reader, owner_scope=ANY_OWNER) == [meu, alheio]
 
 
+def test_o_filtro_de_vin(gravar, reader):
+    gravados = gravar(_registro(T0, vin=OUTRO_VIN), _registro(T0, vin=VIN))
+    [procurado] = [registro for registro in gravados if registro.vin == OUTRO_VIN]
+
+    assert _ler(reader, filters=BronzeFilters(vin=OUTRO_VIN)) == [procurado]
+
+
+def test_o_filtro_de_metrica_casa_qualquer_uma_e_nao_repete_o_registro(gravar, reader):
+    """O registro com as duas métricas aparece duas vezes no índice multikey."""
+    gravados = gravar(
+        _registro(T0, metricas=("rpm", "speed")),
+        _registro(T0 + timedelta(seconds=1), metricas=("speed",)),
+        _registro(T0 + timedelta(seconds=2), metricas=("maf",)),
+        _registro(T0 + timedelta(seconds=3), metricas=()),
+    )
+
+    lidos = _ler(reader, filters=BronzeFilters(metrics=("rpm", "speed")))
+
+    assert lidos == gravados[:2]
+
+
+def test_o_periodo_de_coleta_e_inclusivo_nas_duas_pontas(gravar, reader):
+    antes, inicio, fim, depois = gravar(
+        _registro(T0, coletado=T0),
+        _registro(T0 + timedelta(seconds=1), coletado=T0 + timedelta(hours=1)),
+        _registro(T0 + timedelta(seconds=2), coletado=T0 + timedelta(hours=2)),
+        _registro(T0 + timedelta(seconds=3), coletado=T0 + timedelta(hours=3)),
+    )
+    periodo = BronzeFilters(collected_from=inicio.collected_at, collected_to=fim.collected_at)
+
+    assert _ler(reader, filters=periodo) == [inicio, fim]
+    assert _ler(reader, filters=BronzeFilters(collected_from=fim.collected_at)) == [fim, depois]
+    assert _ler(reader, filters=BronzeFilters(collected_to=antes.collected_at)) == [antes]
+
+
+def test_os_filtros_se_combinam(gravar, reader):
+    [procurado, *_] = gravar(
+        _registro(T0, vin=OUTRO_VIN, metricas=("speed",)),
+        _registro(T0 + timedelta(seconds=1), vin=OUTRO_VIN, metricas=("rpm",)),
+        _registro(T0 + timedelta(seconds=2), vin=VIN, metricas=("speed",)),
+    )
+
+    assert _ler(reader, filters=BronzeFilters(vin=OUTRO_VIN, metrics=("speed",))) == [procurado]
+
+
+@pytest.mark.parametrize(
+    "filtros",
+    [
+        pytest.param(BronzeFilters(vin=OUTRO_VIN), id="por VIN"),
+        pytest.param(BronzeFilters(metrics=("speed", "maf")), id="por métricas"),
+        pytest.param(BronzeFilters(collected_from=T0), id="por período"),
+    ],
+)
+def test_filtrando_le_tudo_uma_vez_so_mesmo_com_empate_no_milissegundo(gravar, reader, filtros):
+    """Com páginas de um, nenhum registro gravado no mesmo milissegundo que outro se
+    perde ou se repete, inclusive com um registro de fora do filtro entre eles."""
+    procurados = [
+        _registro(T0 + timedelta(seconds=1), vin=OUTRO_VIN, metricas=("speed", "maf"), coletado=T0)
+        for _ in range(4)
+    ]
+    de_fora = [
+        _registro(T0 + timedelta(seconds=1), metricas=("rpm",), coletado=T0 - timedelta(hours=1))
+        for _ in range(4)
+    ]
+    gravar(*procurados, *de_fora)
+
+    lidos, posicao = [], BRONZE_START
+    while pagina := _ler(reader, posicao, limit=1, filters=filtros):
+        lidos += pagina
+        posicao = _posicao(pagina[-1])
+
+    assert lidos == sorted(procurados, key=_ordem)
+
+
 def _estagios(plano: Any) -> list[dict]:
     """Os estágios de um plano do ``explain``, em qualquer profundidade."""
     if isinstance(plano, list):
@@ -147,7 +248,9 @@ def test_a_pagina_sai_do_indice_sem_ordenar_em_memoria(gravar, mongo_db, owner_s
     varredura: sem isso, cada página ordenaria a coleção inteira."""
     indexes.apply(mongo_db)
     gravados = gravar(*(_registro(T0 + timedelta(seconds=i)) for i in range(5)))
-    consulta = page_query(_posicao(gravados[1]), until=DEPOIS_DE_TUDO, owner_scope=owner_scope)
+    consulta = page_query(
+        _posicao(gravados[1]), until=DEPOIS_DE_TUDO, owner_scope=owner_scope, filters=NO_FILTERS
+    )
 
     plano = mongo_db[RECORDS].find(consulta, sort=ORDER, limit=2).explain()
 
@@ -155,6 +258,46 @@ def test_a_pagina_sai_do_indice_sem_ordenar_em_memoria(gravar, mongo_db, owner_s
     nomes = {estagio["stage"] for estagio in estagios}
     assert "SORT" not in nomes, nomes
     assert {e.get("indexName") for e in estagios if e["stage"] == "IXSCAN"} == {indexes.INGESTED}
+
+
+@pytest.mark.parametrize(
+    ("filtros", "indice"),
+    [
+        pytest.param(BronzeFilters(vin=OUTRO_VIN), indexes.VIN_INGESTED, id="por VIN"),
+        pytest.param(BronzeFilters(metrics=("speed",)), indexes.METRIC_INGESTED, id="uma métrica"),
+        pytest.param(
+            BronzeFilters(metrics=("maf", "speed")), indexes.METRIC_INGESTED, id="duas métricas"
+        ),
+        pytest.param(BronzeFilters(collected_from=T0), indexes.INGESTED, id="por período"),
+    ],
+)
+def test_a_pagina_filtrada_sai_do_indice_sem_ordenar_em_memoria(gravar, mongo_db, filtros, indice):
+    """A ordem é a do índice também com filtro: o ``$in`` de várias métricas é uma junção
+    ordenada das faixas (``SORT_MERGE``), e não uma ordenação."""
+    indexes.apply(mongo_db)
+    # Os procurados ficam espalhados entre os outros: colados, a varredura pela ordem
+    # acharia todos em seguida, e seria mesmo a melhor escolha.
+    gravar(*(_registro(T0 + timedelta(seconds=i), metricas=("rpm",)) for i in range(60)))
+    procurados = gravar(
+        *(
+            _registro(
+                T0 + timedelta(seconds=12 * i, milliseconds=500),
+                vin=OUTRO_VIN,
+                metricas=("maf", "speed"),
+            )
+            for i in range(5)
+        )
+    )
+    consulta = page_query(
+        _posicao(procurados[1]), until=DEPOIS_DE_TUDO, owner_scope=ANY_OWNER, filters=filtros
+    )
+
+    plano = mongo_db[RECORDS].find(consulta, sort=ORDER, limit=2).explain()
+
+    estagios = _estagios(plano["queryPlanner"]["winningPlan"])
+    nomes = {estagio["stage"] for estagio in estagios}
+    assert "SORT" not in nomes, nomes
+    assert {e.get("indexName") for e in estagios if e["stage"] == "IXSCAN"} == {indice}
 
 
 def test_a_hora_do_servidor_vem_com_fuso(reader):

@@ -36,16 +36,16 @@ class TelemetryBatches(MethodView):
     @permission_required(Permission.TELEMETRIA_ENVIAR)
     @blp.arguments(TelemetryBatchSchema)
     @blp.response(202, BatchReceiptSchema)
-    @error_responses(blp, 403, 503)
+    @error_responses(blp, 403, 413, 503)
     def post(self, payload: dict):
         """Recebe um lote de leituras e o enfileira para a camada bronze.
 
-        Formato inválido reprova o lote inteiro (422). A posse é conferida registro a
-        registro: só segue para a fila o registro de veículo do qual o usuário
-        autenticado é gestor. Os outros voltam em `rejected`, e o lote é aceito em
-        parte. O 202 só sai depois que a fila confirmou o recebimento; com a fila
-        fora, a resposta é 503 com `Retry-After`, e o lote pode ser reenviado inteiro
-        (cada registro é gravado uma vez só, pelo `id`).
+        Formato inválido reprova o lote inteiro (422), e o corpo acima de 1 MiB, com 413.
+        A posse é conferida registro a registro: só segue para a fila o registro de
+        veículo do qual o usuário autenticado é gestor ou motorista. Os outros voltam em
+        `rejected`, e o lote é aceito em parte. O 202 só sai depois que a fila confirmou o
+        recebimento; com a fila fora, a resposta é 503 com `Retry-After`, e o lote pode ser
+        reenviado inteiro (cada registro é gravado uma vez só, pelo `id`).
         """
         # current_user, e não current_owner_scope(...): ninguém envia em nome de outro.
         return self.ingest_service.ingest(

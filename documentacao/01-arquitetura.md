@@ -85,7 +85,7 @@ tempo.
 | **Rota** | `app/blueprint/restapi/v1/` | Traduzir HTTP em chamada de serviço. Validar entrada por schema, devolver a saída. | Montar consulta, conter regra de negócio, usar `try/except` para erro de domínio |
 | **Serviço** | `app/service/` (o pipeline de telemetria em `service/telemetry/`) | Regra de negócio, validação semântica, ownership, controle de transação. O CRUD segue o `BaseService`; o pipeline depende só de portas (`domain/ports.py`) e recebe os adaptadores pelo construtor. | Tocar no ORM direto, saber o que é HTTP (status, header, request). O pipeline, além disso, importar infraestrutura ou adaptador |
 | **Repositório** | `app/repository/` (uma subpasta por tecnologia: `sql/` e `mongo/`) | Única camada que lê e grava dados: o SQL mora em `repository/sql/`, o bronze em `repository/mongo/`. Traduz intenção em consulta. Os adaptadores do Mongo implementam portas do pipeline (`BronzeWriter`, `BronzeReader`) e são os únicos que conhecem o layout do documento. | Conter regra de negócio ou decidir permissão; uma subpasta importar a tecnologia da outra |
-| **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `ports.py`, `contracts/`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
+| **Domínio** | `app/domain/` | Duas partes. O **ORM** (`base.py`, `models.py`) mapeia tabela para classe: colunas e relacionamentos. O **vocabulário** (todo o resto: `authz.py`, `vin.py`, `metric.py`, `ports.py`, `contracts/`) são módulos folha que qualquer camada e qualquer processo importa. | O ORM: conter comportamento de negócio. O vocabulário: importar outra camada, o ORM ou infraestrutura |
 | **Schema** | `app/schemas/` | Único contrato de entrada e saída da API. Valida e serializa. | Acessar banco |
 
 O primeiro nível de pasta é o papel (a camada). O segundo nível é a tecnologia e só existe
@@ -154,8 +154,8 @@ Duas regras que valem a pena memorizar:
 2. **A seta nunca aponta para cima.** Serviço não importa rota, repositório não importa
    serviço. Se você sentir essa necessidade, a lógica está na camada errada.
 
-As **folhas do domínio** (`domain/authz.py`, `domain/vin.py`, `domain/ports.py`,
-`domain/contracts/`) são a exceção
+As **folhas do domínio** (`domain/authz.py`, `domain/vin.py`, `domain/metric.py`,
+`domain/ports.py`, `domain/contracts/`) são a exceção
 prevista pela regra 1: como só importam outras folhas, qualquer camada pode importá-las
 sem criar ciclo nem acoplar duas camadas uma à outra. É o que permite rota, serviço,
 modelo e schema falarem do mesmo vocabulário de permissões.
@@ -178,7 +178,8 @@ lado (tudo o que o módulo carrega, direta ou indiretamente) e reprova se:
   `messaging.consumer`;
 - a silver (a partir da rota do bronze, do `bronze_read_service` e do leitor) alcançar
   `ext.rabbitmq`, `ext.consumer`, `messaging`, o pika, `service.telemetry.ingest_*` ou o lado
-  do consumer (`bronze_ingest_service`, `bronze_rules`, `repository.mongo.bronze_writer`);
+  do consumer (`bronze_ingest_service`, `bronze_rules`, `repository.mongo.bronze_writer`,
+  `repository.mongo.rejection_log`);
 - uma subpasta do repositório alcançar a tecnologia da outra, ou o serviço.
 
 Os fechos do producer e da silver não seguem o `ext.container`: ele é a raiz de composição dos
@@ -186,7 +187,7 @@ dois processos HTTP e monta os adaptadores de ambos (o publisher e o leitor do b
 decide o que cada processo conecta é o perfil, e o `test_composicao.py` confere o processo
 montado. Do bronze, o writer (consumer) e o leitor (silver) compartilham só o cliente do
 `ext.mongo`, o layout do documento (`bronze_document.py`) e o `server.py` (o prazo de cada
-operação, a classificação da falha e a hora do servidor).
+operação, a classificação da falha, a gravação que pula duplicados e a hora do servidor).
 
 ---
 
@@ -373,6 +374,7 @@ app/
     authz.py                 papéis, permissões, o mapa entre eles e o escopo de dono
                              (ANY_OWNER) (folha)
     vin.py                   formato e forma canônica do VIN (folha)
+    metric.py                a regra do nome de uma métrica (folha)
     ports.py                 portas do pipeline: Protocol e os tipos que trocam (folha)
     contracts/
       telemetry_batch.py     contrato da fila v1: envelope, encode/decode e o endereço (folha)
@@ -386,13 +388,16 @@ app/
       vehicle_driver_repository.py  os vínculos de motorista (joinedload das três relações);
                              desliga os de um veículo excluído
     mongo/                   pymongo: o bronze
-      bronze_document.py     BronzeEntry ↔ documento: o único lugar que conhece o layout
+      bronze_document.py     BronzeEntry e recusa ↔ documento: o único lugar que conhece o layout
       server.py              o prazo de cada operação, a falha da infraestrutura
-                             (BronzeUnavailable) e a hora do servidor: comum ao writer e ao leitor
-      bronze_writer.py       gravação idempotente pelo _id (porta BronzeWriter) + hora do servidor
-      bronze_reader.py       leitura em ordem de gravação, depois de uma posição (porta
-                             BronzeReader) + hora do servidor
-      indexes.py             os índices do bronze (aplicados pelo setup)
+                             (BronzeUnavailable), a gravação que pula duplicados e a hora do
+                             servidor: comum aos adaptadores
+      bronze_writer.py       gravação idempotente pelo _id, o remetente dos que já estavam
+                             (porta BronzeWriter) + hora do servidor
+      rejection_log.py       telemetry_rejections: o que o consumer recusou (porta RejectionLog)
+      bronze_reader.py       leitura em ordem de gravação, depois de uma posição e dentro dos
+                             filtros (porta BronzeReader) + hora do servidor
+      indexes.py             os índices do bronze e das recusas (aplicados pelo setup)
   service/
     base_service.py          CRUD + ownership + ganchos
     errors.py                exceções de domínio
@@ -405,9 +410,10 @@ app/
     telemetry/               o pipeline: só portas e folhas, sem BaseService
       ingest_rules.py        producer: partição por posse, regras puras
       ingest_service.py      producer: posse do lote + publicação; o recibo (IngestReceipt)
-      bronze_rules.py        consumer: o BronzeEntry de cada registro, available_metrics
-      bronze_ingest_service.py  consumer: grava o lote no bronze; duplicado é sucesso
-      bronze_read_service.py    silver: a janela de estabilização, o cursor e o has_more
+      bronze_rules.py        consumer: o BronzeEntry e a recusa de cada registro, a forma do
+                             VIN, available_metrics
+      bronze_ingest_service.py  consumer: grava o lote no bronze; separa duplicado de colisão
+      bronze_read_service.py    silver: a janela de estabilização, os filtros, o cursor e o has_more
   schemas/
     pagination_schema.py     parâmetros e envelope de paginação
     error_schema.py          envelope de erro (documentação)

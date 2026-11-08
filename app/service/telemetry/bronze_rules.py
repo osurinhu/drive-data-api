@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Any
 
 from domain.contracts.telemetry_batch import TelemetryBatchV1, TelemetryRecordV1
-from domain.ports import BronzeEntry
+from domain.ports import BronzeEntry, BronzeRejection, BronzeRejectionReason
+from domain.vin import is_valid_vin, normalize_vin
 
 
 def available_metrics(raw: Mapping[str, Any]) -> tuple[str, ...]:
@@ -26,6 +27,35 @@ def available_metrics(raw: Mapping[str, Any]) -> tuple[str, ...]:
         and isinstance(reading.get("metric"), str)
     }
     return tuple(sorted(metrics))
+
+
+def has_canonical_vin(record: TelemetryRecordV1) -> bool:
+    """O VIN do envelope está como o producer o publica: válido e na forma canônica.
+
+    A fila é uma fronteira de confiança, e o que chega aqui fora disso é bug ou versão
+    divergente do producer. O id e a data com fuso o contrato já garante.
+    """
+    return record.vin == normalize_vin(record.vin) and is_valid_vin(record.vin)
+
+
+def bronze_rejection(
+    batch: TelemetryBatchV1,
+    record: TelemetryRecordV1,
+    reason: BronzeRejectionReason,
+    rejected_at: datetime,
+) -> BronzeRejection:
+    return BronzeRejection(
+        record_id=record.record_id,
+        vin=record.vin,
+        user_id=batch.sender.user_id,
+        reason=reason,
+        message_id=batch.message_id,
+        request_id=batch.request_id,
+        received_at=batch.received_at,
+        rejected_at=rejected_at,
+        schema_version=batch.schema_version,
+        raw=record.raw,
+    )
 
 
 def bronze_entry(

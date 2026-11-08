@@ -44,6 +44,7 @@ STATUS_DESCRIPTION: dict[int, str] = {
     403: "Acesso negado",
     404: "Recurso não encontrado",
     409: "Conflito com um registro existente",
+    413: "Corpo da requisição grande demais",
     422: "Falha de validação ou de regra de negócio",
     500: "Erro interno no servidor",
     503: "Serviço indisponível",

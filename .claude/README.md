@@ -464,3 +464,33 @@ sugestão que restava, um contrato para o método de escrita sem `@permission_re
     Das cinco sugestões, entraram todas: o 401 na `rotas.md`, o `op.f()` na 0006, a asserção vaga do
     `set-password`, a preferência pelo prompt da senha no README e a pendência antiga do
     `leitor`, que já estava resolvida pelo contrato e saiu de "Pendências".
+- 2026-11-08 — Pipeline de telemetria, Fase 4 (contrato e regras completos): formato estrito do
+  lote e limite de 1 MiB (413); `telemetry_rejections`, com a distinção entre duplicado e colisão;
+  filtros da silver com o cursor amarrado a eles e os índices `ix_vin_ingested` e
+  `ix_metric_ingested`. O contrato da fila e o exemplo canônico v1 não mudaram.
+  - **Desvios do plano:**
+    - o cursor sobe para `v: 2` em vez de o `v: 1` ganhar a chave `f`, e o `v: 1` continua aceito
+      como a leitura sem filtro;
+    - o serviço devolve um `BronzeCursor` (posição + filtros), para o schema de saída calcular a
+      impressão; o VIN do filtro é normalizado no `post_load`, porque a impressão depende dele;
+    - a integridade no consumer só confere o VIN: o id e a data com fuso o contrato já garante;
+    - o TTL das recusas é uma constante de 30 dias em `indexes.py`. Quando virar configuração, na
+      Fase 7, o valor chega por parâmetro do `apply`, porque o `indexes.py` não importa `ext`;
+    - o `MAX_CONTENT_LENGTH` estava no plano desde a Fase 1 e não existia: entrou aqui;
+    - `domain/metric.py` é folha nova, porque o envio e a leitura usam o mesmo nome de métrica.
+  - **Regras alteradas:** a `repositorios-mongo.md` (recusas, `insert_skipping_duplicates`, os
+    filtros), a `servicos-telemetria.md` (duplicado, colisão e o `RejectionLog`) e a `dominio.md`.
+    O `/smoke-api` ganhou o 413, e o `/smoke-pipeline`, os filtros e o cursor de outro filtro.
+    Valem a partir da sessão seguinte.
+  - **Lições:**
+    - o `$` de `validate.Regexp` aceita um `\n` no fim: use `fullmatch`;
+    - teste de plano com `explain` precisa dos registros procurados espalhados entre os outros.
+      Colados, a varredura pela ordem acha todos em seguida e é mesmo a melhor escolha do Mongo;
+    - script Python que chama `bash` no Windows pega o do WSL e falha sem saída: use o caminho do
+      Git Bash, e confira que a mutação reprovou por teste, e não por erro de execução.
+  - **Contagens:** `/verificar tudo` com 529 testes; `/smoke-api` com 52 verificações;
+    `/smoke-pipeline` verde. As 22 mutações das regras novas foram reprovadas.
+  - **Revisão** (`revisor-arquitetura`, sem bloqueantes). Corrigidos: o `metric.py` no mapa da 01,
+    na tabela de camadas e na `dominio.md`; dois "Ainda não (Fase 4)" da 02 que a fase tornou falsos
+    (um deles a revisão não apontou); o parágrafo colado do cursor; o porquê do `v: 2` na 02; os
+    limites no checklist de produção; a docstring do envio.

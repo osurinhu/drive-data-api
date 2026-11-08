@@ -12,6 +12,7 @@ import pytest
 from dependency_injector import providers
 
 from domain.authz import Role
+from repository.mongo.bronze_document import REJECTIONS
 from service.telemetry.bronze_read_service import BronzeReadService
 
 ENVIO = "/api/v1/telemetry/batches"
@@ -129,4 +130,36 @@ def test_o_motorista_envia_e_a_silver_ve_o_vinculo(app, client, login, bronze_qu
     assert recusado.get_json()["accepted"] == 0
     assert recusado.get_json()["rejected"][0]["reason"] == "vehicle_not_authorized"
     assert _ler_tudo(client, da_silver, cursor, limit=10)[0] == []
+    assert bronze_queue() == []
+
+
+@pytest.mark.usefixtures("sem_janela")
+def test_id_de_outro_remetente_nao_sobrescreve_e_deixa_rastro(
+    app, client, login, bronze_queue, mongo_db
+):
+    """Duas pessoas, dois veículos, o mesmo id de registro: o primeiro fica no bronze, e o
+    segundo vai para as recusas, com a mensagem confirmada."""
+    gestora, da_gestora = login("gestora")
+    outra, da_outra = login("outra")
+    _, da_silver = login("silver-etl", role=Role.SILVER)
+    client.post("/api/v1/vehicle/", json={"vin": MEU}, headers=da_gestora)
+    client.post("/api/v1/vehicle/", json={"vin": ALHEIO}, headers=da_outra)
+    original = _registro(MEU)
+    colidente = {**_registro(ALHEIO), "id": original["id"]}
+
+    primeiro = client.post(ENVIO, json={"records": [original]}, headers=da_gestora)
+    _consumir(app)
+    segundo = client.post(
+        ENVIO, json={"records": [colidente]}, headers={**da_outra, "X-Request-ID": "e2e-colisao"}
+    )
+    _consumir(app)
+    [item], _, _ = _ler_tudo(client, da_silver, limit=10)
+
+    assert (primeiro.status_code, segundo.status_code) == (202, 202)
+    assert (item["user_id"], item["raw"]) == (gestora["id"], original)
+    [recusa] = mongo_db[REJECTIONS].find()
+    assert recusa["reason"] == "id_collision"
+    assert recusa["user_id"] == outra["id"]
+    assert recusa["request_id"] == "e2e-colisao"
+    assert recusa["raw"] == colidente
     assert bronze_queue() == []

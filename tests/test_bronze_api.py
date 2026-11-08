@@ -90,6 +90,63 @@ def test_a_silver_le_os_registros_de_todos_os_remetentes(client, silver, bronze)
     assert {item["user_id"] for item in pagina["items"]} == {51, 52}
 
 
+def test_os_filtros_da_query_recortam_a_leitura(client, silver, bronze):
+    procurado = bronze.gravar(60, vin="9BWZZZ377VT004251", metricas=("rpm", "speed"))
+    bronze.gravar(60, metricas=("speed",))
+    bronze.gravar(60, vin="9BWZZZ377VT004251", metricas=("maf",))
+
+    response = client.get(
+        URL,
+        query_string={"vin": "9bwzzz377vt004251", "metric": ["speed", "rpm"]},
+        headers=silver,
+    )
+
+    assert response.status_code == 200, response.get_json()
+    assert [i["record_id"] for i in response.get_json()["items"]] == [str(procurado.record_id)]
+
+
+def test_o_cursor_continua_a_leitura_com_os_mesmos_filtros(client, silver, bronze):
+    vin = "9BWZZZ377VT004251"
+    registros = [bronze.gravar(90, vin=vin), bronze.gravar(80), bronze.gravar(70, vin=vin)]
+    parametros = {"vin": vin, "limit": 1}
+
+    primeira = client.get(URL, query_string=parametros, headers=silver).get_json()
+    segunda = client.get(
+        URL, query_string={**parametros, "cursor": primeira["next_cursor"]}, headers=silver
+    ).get_json()
+
+    lidos = [item["record_id"] for item in primeira["items"] + segunda["items"]]
+    assert lidos == [str(registros[0].record_id), str(registros[2].record_id)]
+    assert (primeira["has_more"], segunda["has_more"]) == (True, False)
+
+
+def test_o_cursor_de_outro_filtro_responde_422(client, silver, bronze):
+    bronze.gravar(60)
+    cursor = client.get(URL, headers=silver).get_json()["next_cursor"]
+    bronze.chamadas.clear()
+
+    response = client.get(
+        URL, query_string={"cursor": cursor, "vin": "9BWZZZ377VT004251"}, headers=silver
+    )
+
+    assert response.status_code == 422, response.get_json()
+    assert response.get_json()["errors"]["query"] == {
+        "cursor": ["O cursor pertence a outro filtro."]
+    }
+    assert bronze.chamadas == []
+
+
+def test_ingested_from_comeca_a_leitura(client, silver, bronze):
+    bronze.gravar(90)
+    no_ponto = bronze.gravar(60)
+
+    response = client.get(
+        URL, query_string={"ingested_from": no_ponto.ingested_at.isoformat()}, headers=silver
+    )
+
+    assert [i["record_id"] for i in response.get_json()["items"]] == [str(no_ponto.record_id)]
+
+
 @pytest.mark.parametrize("papel", [Role.USUARIO, Role.ADMIN], ids=["usuario", "admin"])
 def test_quem_nao_e_silver_recebe_403(client, login, bronze, papel):
     """Nem o admin lê o bronze: menor privilégio sobre dado pessoal."""
@@ -120,6 +177,13 @@ def test_sem_token_responde_401(client):
         pytest.param({"cursor": "lixo"}, "cursor", id="cursor malformado"),
         pytest.param({"limit": 0}, "limit", id="limite zero"),
         pytest.param({"limit": 1001}, "limit", id="acima do máximo"),
+        pytest.param({"vin": "curto"}, "vin", id="VIN inválido"),
+        pytest.param({"metric": "RPM"}, "metric", id="métrica fora do padrão"),
+        pytest.param(
+            {"collected_from": "2026-11-07T12:00:01Z", "collected_to": "2026-11-07T12:00:00Z"},
+            "collected_from",
+            id="período invertido",
+        ),
     ],
 )
 def test_query_fora_do_contrato_responde_422(client, silver, bronze, parametros, campo):

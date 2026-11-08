@@ -31,6 +31,10 @@ OPENAPI_JSON_PATH = "openapi.json"
 # tratadas em um 500 com o envelope padrão (ver app/ext/error_handler.py).
 PROPAGATE_EXCEPTIONS = false
 
+# Teto do corpo de cada requisição: acima dele, a resposta é 413. 1 MiB cabe com folga num
+# lote de 500 registros, cerca de 300 KB; o número de registros e de leituras fica no schema.
+MAX_CONTENT_LENGTH = 1048576
+
 LOG_LEVEL = "INFO"
 
 # --- Persistência -------------------------------------------------------------

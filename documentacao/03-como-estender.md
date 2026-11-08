@@ -16,7 +16,7 @@ repositório, serviço, schemas, rota e testes.
 | Uma chave de configuração | [9](#9-configuração) |
 | Restringir uma rota, ou criar permissão/papel | [10](#10-autorização) |
 | Mudar a mensagem que atravessa a fila | [11](#11-contrato-da-fila) |
-| Um metadado novo no documento do bronze, ou um índice | [12](#12-bronze) |
+| Um metadado novo no documento do bronze, um filtro da silver ou um índice | [12](#12-bronze) |
 | Um sub-recurso que herda a posse de outro (os motoristas do veículo) | [13](#13-sub-recurso) |
 
 No fim há um [checklist de revisão](#checklist-de-revisão).
@@ -757,7 +757,8 @@ registro, com `_id` igual ao `id` do registro, o bruto em `raw` e os metadados d
 pelo `bronze-api`, em ordem de gravação, por cursor (02-decisoes, "A silver lê o bronze por
 cursor"). Os serviços montam e recebem um `BronzeEntry` e não conhecem o BSON. Só o
 `repository/mongo/bronze_document.py` conhece o layout do documento: `to_document` na
-gravação, `from_document` na leitura.
+gravação, `from_document` na leitura. O que o consumer recusa vai para `telemetry_rejections`
+(`BronzeRejection`, `to_rejection_document`).
 
 ### 12.1 Metadado novo no documento
 
@@ -779,7 +780,25 @@ gravação, `from_document` na leitura.
 O bronze não é reescrito: os documentos já gravados ficam sem o campo. O campo novo do
 `BronzeEntry` leva um valor padrão, e o `from_document` o lê com `ingestion.get(...)`.
 
-### 12.2 Índice novo
+### 12.2 Filtro novo na leitura da silver
+
+1. O campo em `BronzeFilters` (`app/domain/ports.py`), com valor padrão: campo vazio não restringe.
+2. O parâmetro em `BronzeQuerySchema` (`app/schemas/bronze_schema.py`), montado em
+   `_monta_a_leitura` na forma canônica, e o campo em `filters_fingerprint`. Sem ele, trocar esse
+   filtro no meio da leitura não seria notado.
+3. A condição em `page_query` (`app/repository/mongo/bronze_reader.py`) e no `LeituraEmMemoria`
+   (`tests/conftest.py`).
+4. Se o filtro corta bastante, um índice com a ordem de leitura depois dele (receita 12.3) e o caso
+   em `test_a_pagina_filtrada_sai_do_indice_sem_ordenar_em_memoria`. Se é só um filtro residual,
+   diga na descrição do parâmetro com o que combiná-lo.
+5. Os testes: `test_filtrando_le_tudo_uma_vez_so_mesmo_com_empate_no_milissegundo` (`tests/mongo/`)
+   e o `test_o_cursor_de_outro_filtro_e_recusado` (`tests/unit/test_leitura_bronze.py`).
+
+A impressão é posicional: um campo novo em `filters_fingerprint` muda a de todo cursor já emitido,
+mesmo sem o filtro novo. A silver levaria 422 com o cursor guardado. Por isso o filtro novo sobe
+`CURSOR_VERSION`, e a versão anterior continua em `_CURSOR_KEYS`, com a impressão no formato antigo.
+
+### 12.3 Índice novo
 
 1. Uma constante com o nome (`ix_<campos>`) e o `create_index` em `apply`
    (`app/repository/mongo/indexes.py`), com o nome na lista que ela devolve.

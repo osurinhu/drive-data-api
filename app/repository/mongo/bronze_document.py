@@ -15,10 +15,14 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
-from domain.ports import BronzeEntry
+from domain.ports import BronzeEntry, BronzeRejection
 
 #: A coleção dos registros do bronze.
 RECORDS = "telemetry_records"
+#: A coleção do que o consumer recusou.
+REJECTIONS = "telemetry_rejections"
+#: O necessário de um registro para saber quem o enviou (``sender_of``).
+SENDER_PROJECTION = {"ingestion.user_id": 1}
 
 
 def to_document(entry: BronzeEntry) -> dict[str, Any]:
@@ -41,6 +45,28 @@ def to_document(entry: BronzeEntry) -> dict[str, Any]:
             "request_id": entry.request_id,
             "schema_version": entry.schema_version,
         },
+    }
+
+
+def sender_of(document: Mapping[str, Any]) -> tuple[UUID, int]:
+    return UUID(document["_id"]), document["ingestion"]["user_id"]
+
+
+def to_rejection_document(rejection: BronzeRejection) -> dict[str, Any]:
+    """O ``_id`` junta a mensagem e o registro: a reentrega da mensagem cai no mesmo
+    documento, e o reenvio do lote pelo app, que é outra mensagem, gera outro."""
+    return {
+        "_id": f"{rejection.message_id}:{rejection.record_id}",
+        "record_id": str(rejection.record_id),
+        "vin": rejection.vin,
+        "user_id": rejection.user_id,
+        "reason": rejection.reason.value,
+        "message_id": str(rejection.message_id),
+        "request_id": rejection.request_id,
+        "received_at": rejection.received_at,
+        "rejected_at": rejection.rejected_at,
+        "schema_version": rejection.schema_version,
+        "raw": rejection.raw,
     }
 
 

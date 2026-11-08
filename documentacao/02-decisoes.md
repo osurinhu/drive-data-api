@@ -383,6 +383,18 @@ texto). O `MongoBronzeWriter` grava o lote com `insert_many(ordered=False)`: o M
 todos os que pode, e os recusados por chave duplicada (código 11000) voltam como "já estavam
 lá". Duplicado é sucesso: a mensagem recebe ack, e o serviço registra a contagem no log.
 Reentrega da fila ou reenvio do app gravam só o que faltava.
+**Duplicado ou colisão:** o `id` vem do app, e duas pessoas podem mandar o mesmo. O serviço
+consulta o remetente dos que já estavam: o mesmo é duplicado; outro é **colisão**, e o registro
+antigo fica. Sem a distinção, o registro novo sumiria sem rastro, contado como reenvio.
+**O que não se grava deixa rastro** em `telemetry_rejections`: a colisão e o registro cujo VIN
+não está na forma que o producer publica (a fila é uma fronteira de confiança; o id e a data com
+fuso o contrato já garante). A recusa guarda o motivo, os ids do envelope e o bruto, tem
+retenção de 30 dias (índice TTL) e é gravada antes do ack, com a mesma durabilidade do bronze. O
+`_id` é `<message_id>:<record_id>`: a reentrega cai no mesmo documento, e o reenvio do lote, que
+é outra mensagem, deixa outro. Um registro ruim não vai para a DLQ, que recebe a mensagem
+inteira e é fila de ação operacional.
+**Descartado:** comparar o bruto, em vez do remetente, para decidir o duplicado: o mesmo app
+reenviando com um campo a mais viraria colisão.
 O documento guarda o registro como chegou (`raw`) e os metadados em `ingestion`: o veredito do
 producer (`vehicle_id`, `user_id`, `sender_relation`), as datas, os ids de correlação, a
 versão do contrato e `available_metrics` (as métricas com leitura disponível, para o filtro da
@@ -403,14 +415,28 @@ como está, e o consumer o trata como bug. O prazo e essa classificação moram 
 `repository/mongo/server.py`, que o leitor da silver também usa.
 **Por quê:** o RabbitMQ entrega *at-least-once*, e o app reenvia o lote inteiro quando não
 recebe o 202. O índice único do `_id` é o que torna as duas repetições seguras.
-**Ainda não (Fase 4):** distinguir o duplicado (mesmo remetente) da colisão de `id` (outro
-remetente), que vai para `telemetry_rejections`. Hoje os dois recebem ack.
 **Descartado:** coleção *time-series*, que não aceita índice único; consultar antes de gravar
 (uma ida a mais e uma corrida entre dois consumers); `ordered=True`, que pararia no primeiro
 duplicado; tratar a credencial recusada como bug, que mandaria a fila inteira para a DLQ em
 `AMQP_DELIVERY_LIMIT` rodadas por causa de uma senha errada; gravar sem prazo, que prenderia o
 consumer num servidor que aceita a conexão e não responde, até o broker o derrubar por falta de
 heartbeat (e aí a entrega conta).
+
+### O formato do lote é estrito, e os limites têm dois níveis
+O schema do envio (`schemas/telemetry_schema.py`) não converte: `available` só aceita booleano, e
+`value`, número ou nulo; um `"true"` ou um `"1065.0"` é 422. A leitura indisponível tem `value`
+nulo, e a disponível, numérico. Métricas não se repetem no registro, e ids não se repetem no
+lote. Campo desconhecido no registro e na leitura é aceito e fica em `raw`; na raiz do corpo, é
+422.
+**Por quê:** o bronze guarda o bruto como veio. Converter validaria um valor e deixaria outro
+gravado, e a silver receberia o tipo errado.
+**Dois níveis de limite:** as contagens (500 registros, 64 leituras) ficam no schema, com erro
+por campo; o tamanho do corpo fica em `MAX_CONTENT_LENGTH` (1 MiB, 413), porque recusa antes de
+o JSON ser lido. O teto vale para toda rota do processo, o que não custa nada: nenhuma outra
+recebe corpo grande.
+Nada disso muda o contrato da fila: as regras apertam a entrada HTTP, e o envelope `v1` continua
+igual. O consumer não repete o schema do app; confere o barato (ver "A gravação no bronze é
+idempotente").
 
 ### O destino de cada mensagem: ack, DLQ ou de volta à fila
 O `RabbitTelemetryConsumer` consome com ack manual e `prefetch` (`AMQP_PREFETCH`). A resposta
@@ -465,10 +491,28 @@ estritamente depois da posição do cursor. O `BronzeReadService`:
    item, ou repete a posição recebida (ou o começo) na página vazia: a silver nunca fica sem
    cursor.
 
-O cursor é opaco: base64url de `{"v": 1, "t": <ms>, "id": "<record_id>"}`. É representação
-HTTP, e por isso o codec mora em `schemas/bronze_schema.py`; o serviço só conhece a
-`BronzePosition` (`domain/ports.py`). Cursor que a API não emitiu é 422 ("Cursor inválido."),
-sem explicar o formato. O `limit` vai de 1 a 1000 (500 por padrão), constantes do schema. A
+O cursor é opaco: base64url de `{"v": 2, "t": <ms>, "id": "<record_id>", "f": "<impressão dos
+filtros>"}`. É representação HTTP, e por isso o codec mora em `schemas/bronze_schema.py`; o
+serviço só conhece a `BronzePosition` e os `BronzeFilters` (`domain/ports.py`). Cursor que a API
+não emitiu é 422 ("Cursor inválido."), sem explicar o formato. O cursor `v: 1`, de antes dos
+filtros, continua aceito e vale como a leitura sem filtro. A versão subiu, em vez de o `v: 1`
+só ganhar a chave `f`, porque cada versão tem exatamente as suas chaves: o cursor com chave a
+mais continua recusado.
+**Filtros:** `vin` (exato, na forma canônica), `metric` (até 10; casa quem tem leitura
+disponível de ao menos uma), `collected_from` e `collected_to`, que se combinam. Também
+`ingested_from`, o ponto de partida, aceito só sem cursor. O VIN e a métrica têm índice próprio,
+com a ordem de leitura depois deles (`ix_vin_ingested`, `ix_metric_ingested`, multikey): a
+página não ordena em memória, e o `$in` de várias métricas é uma junção ordenada das faixas. O
+período de coleta só descarta o que a varredura trouxe: um recorte grande deve vir com um VIN
+ou um `ingested_from`.
+**O cursor fica amarrado aos filtros** pela impressão: trocar de filtro no meio da leitura é 422
+("O cursor pertence a outro filtro."). Sem isso, a posição de uma leitura aplicada a outra pularia
+registros sem aviso. A impressão é calculada sobre a forma canônica, então VIN em minúsculas,
+métricas em outra ordem ou data em outro fuso são o mesmo recorte. Não protege de quem forja o
+cursor, e não precisa: a silver lê o bronze inteiro de todo modo.
+**Descartado:** assinar o cursor (o filtro não é fronteira de permissão) e guardar os filtros
+dentro do cursor, para dispensá-los na chamada (a URL deixaria de dizer o que se lê).
+O `limit` vai de 1 a 1000 (500 por padrão), constantes do schema. A
 página não traz total (`CursorPage`, em `service/pagination.py`): a coleção cresce enquanto é
 lida, e um total custaria uma contagem por chamada sem significado estável.
 **Por que não repete:** a posição `(ingested_at, _id)` é única (o `_id` desempata o mesmo
@@ -484,7 +528,8 @@ primário desfaria.
 **Protocolo da silver:** chamar com o cursor guardado, processar a página e só então guardar o
 `next_cursor`; com `has_more`, chamar de novo em seguida, e sem ele, esperar o intervalo de
 polling. A entrega é *at-least-once* do lado dela (uma queda entre processar e guardar repete
-a página), então ela deduplica por `record_id`. Para reler tudo, basta não mandar cursor.
+a página), então ela deduplica por `record_id`. Para reler tudo, basta não mandar cursor (ou
+mandar `ingested_from`).
 Com o bronze fora, a resposta é 503, sem `Retry-After`: a silver repete no próprio intervalo,
 com o mesmo cursor. Cada leitura faz duas operações no Mongo (a hora e a página), cada uma com
 prazo de `BRONZE_READ_TIMEOUT_SECONDS` (5 s).
@@ -501,9 +546,6 @@ para o carimbo ou para o limite (consumers e `bronze-api` em hosts diferentes).
 **Custo aceito:** a silver vê cada registro uns 30 s depois de ele chegar ao bronze. Num
 failover do replica set, o relógio do novo primário pode diferir do antigo; a premissa da
 janela vira alerta na Fase 6 (`bronze_stamp_age_seconds`).
-**Ainda não (Fase 4):** os filtros (`vin`, `metric`, `collected_from`/`collected_to`,
-`ingested_from`) e o cursor amarrado a eles. O cursor de hoje (v1) continuará aceito, como a
-leitura sem filtro: a silver não precisa reler o bronze quando os filtros chegarem.
 
 ---
 

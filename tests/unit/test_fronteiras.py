@@ -278,6 +278,7 @@ FORA_DA_SILVER = (
     "service.telemetry.bronze_ingest_service",
     "service.telemetry.bronze_rules",
     "repository.mongo.bronze_writer",
+    "repository.mongo.rejection_log",
 )
 
 #: Cada pasta do repositório fica na sua tecnologia, e nenhuma sobe para o serviço.

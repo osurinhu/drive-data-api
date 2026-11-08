@@ -7,14 +7,16 @@ qualquer outro erro do Mongo sobe como está. Não importa ``ext``: quem chama p
 banco.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
 import pymongo
+from pymongo.collection import Collection
 from pymongo.database import Database
-from pymongo.errors import ConnectionFailure, OperationFailure, PyMongoError
+from pymongo.errors import BulkWriteError, ConnectionFailure, OperationFailure, PyMongoError
+from pymongo.write_concern import WriteConcern
 
 from domain.ports import BronzeUnavailable
 
@@ -22,6 +24,14 @@ from domain.ports import BronzeUnavailable
 #: ``Unauthorized``) e a credencial (18, ``AuthenticationFailed``). Atingem toda
 #: operação, como o servidor fora do ar.
 REFUSED_BY_CONFIGURATION = frozenset({13, 18})
+
+#: O código de erro do Mongo para chave duplicada.
+DUPLICATE_KEY = 11000
+
+#: Confirmada pela maioria do replica set e no journal: o que o consumer confirmou ao
+#: broker não some numa troca de primário. Num nó só (o compose), vale como a
+#: confirmação do próprio nó.
+DURABLE = WriteConcern(w="majority", j=True)
 
 
 @contextmanager
@@ -40,6 +50,29 @@ def operation(timeout: float) -> Iterator[None]:
         if is_unavailable(error):
             raise BronzeUnavailable(describe(error)) from error
         raise
+
+
+def insert_skipping_duplicates(
+    collection: Collection[Any], documents: Sequence[dict[str, Any]], *, timeout: float
+) -> set[int]:
+    """Grava todos os que puder e devolve a posição, na lista, dos recusados por chave
+    duplicada: o que já existe fica como está.
+
+    Vale o write concern da coleção recebida. Sem a confirmação dele, levanta
+    ``BronzeUnavailable``: gravou, e repetir é seguro. Qualquer outro erro de escrita
+    sobe classificado pelo ``operation``.
+    """
+    with operation(timeout):
+        try:
+            collection.insert_many(documents, ordered=False)
+        except BulkWriteError as error:
+            if error.details.get("writeConcernErrors"):
+                raise BronzeUnavailable("writeConcernError") from error
+            write_errors = error.details.get("writeErrors", [])
+            if any(write_error.get("code") != DUPLICATE_KEY for write_error in write_errors):
+                raise
+            return {write_error["index"] for write_error in write_errors}
+    return set()
 
 
 def server_time(database: Database[Any], *, timeout: float) -> datetime:

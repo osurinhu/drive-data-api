@@ -12,7 +12,7 @@ import pytest
 
 from domain.ports import BronzeEntry, BronzeUnavailable
 from repository.mongo import indexes
-from repository.mongo.bronze_document import RECORDS
+from repository.mongo.bronze_document import RECORDS, REJECTIONS
 from repository.mongo.bronze_writer import MongoBronzeWriter
 
 #: Milissegundos: a precisão da data BSON.
@@ -96,6 +96,19 @@ def test_lote_gravado_em_parte_so_completa_o_que_faltava(writer, mongo_db):
     assert mongo_db[RECORDS].count_documents({}) == 2
 
 
+def test_diz_quem_enviou_cada_registro_gravado(writer):
+    meu, alheio, ausente = _registro(user_id=51), _registro(user_id=52), _registro()
+    writer.insert_new([meu, alheio])
+
+    remetentes = writer.senders_of({meu.record_id, alheio.record_id, ausente.record_id})
+
+    assert remetentes == {meu.record_id: 51, alheio.record_id: 52}
+
+
+def test_sem_ids_nao_consulta_nada(writer):
+    assert writer.senders_of(set()) == {}
+
+
 def test_a_hora_do_servidor_vem_com_fuso_e_e_a_de_agora(writer):
     hora = writer.server_time()
 
@@ -153,5 +166,15 @@ def test_os_indices_do_bronze_se_aplicam_de_novo_sem_mudar_nada(mongo_db):
     nomes = indexes.apply(mongo_db)
 
     existentes = mongo_db[RECORDS].index_information()
-    assert set(nomes) <= set(existentes)
-    assert existentes[indexes.INGESTED]["key"] == [("ingestion.ingested_at", 1), ("_id", 1)]
+    ordem = [("ingestion.ingested_at", 1), ("_id", 1)]
+    assert existentes[indexes.INGESTED]["key"] == ordem
+    assert existentes[indexes.VIN_INGESTED]["key"] == [("ingestion.vin", 1), *ordem]
+    assert existentes[indexes.METRIC_INGESTED]["key"] == [
+        ("ingestion.available_metrics", 1),
+        *ordem,
+    ]
+    recusas = mongo_db[REJECTIONS].index_information()
+    assert set(nomes) <= set(existentes) | set(recusas)
+    assert recusas[indexes.REJECTION_MESSAGE]["key"] == [("message_id", 1)]
+    assert recusas[indexes.REJECTION_TTL]["key"] == [("rejected_at", 1)]
+    assert recusas[indexes.REJECTION_TTL]["expireAfterSeconds"] == 30 * 24 * 60 * 60

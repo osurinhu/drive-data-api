@@ -171,6 +171,20 @@ polling. Uma queda entre processar e guardar repete a página: ela deduplica por
 Com o Mongo fora, a resposta é 503, e a chamada se repete com o mesmo cursor. Nem o `admin`
 nem o `usuario` leem o bronze (403).
 
+A leitura aceita filtros: `vin`, `metric` (repetível, até 10), `collected_from` e `collected_to`.
+O começo pode ser um `ingested_from`, em vez do cursor. O cursor só vale para os filtros com que
+foi emitido: mudou o filtro, comece de novo, ou a resposta é 422. O período de coleta não tem
+índice, então combine um recorte grande com `vin` ou `ingested_from`.
+
+```bash
+curl "http://localhost:5001/api/v1/bronze/records?vin=93YBSR7RHEJ298116&metric=rpm&metric=speed" \
+  -H "Authorization: Bearer <token>"
+```
+
+O registro que o consumer não grava não some: um `id` já enviado por outra pessoa ou um VIN fora
+da forma ficam em `telemetry_rejections`, por 30 dias, com o motivo e o bruto (a coleção é a mesma
+consulta do `mongosh` acima, com `db.telemetry_rejections.find()`).
+
 ### Rodando fora do Docker
 
 ```bash
@@ -384,6 +398,8 @@ Detalhes e o raciocínio por trás:
 - [ ] Trocar o Mongo e o RabbitMQ de nó único por replica set e cluster.
 - [ ] Conferir que o build de produção usa `target: runtime` — o estágio `dev` carrega as
       ferramentas de teste e não deve ir para produção.
+- [ ] Calibrar os limites do envio com o volume real: `MAX_CONTENT_LENGTH` (1 MiB) no
+      `settings.toml`, e os 500 registros e 64 leituras no `app/schemas/telemetry_schema.py`.
 - [ ] Rever `JWT_ACCESS_TOKEN_EXPIRES` (padrão: 15 min) e `JWT_REFRESH_TOKEN_EXPIRES` (30 dias),
       e agendar o `flask prune-tokens`, que apaga da tabela os tokens de renovação expirados.
 - [ ] Revisar `ROLE_PERMISSIONS` em `app/domain/authz.py` — os papéis que acompanham a base são um

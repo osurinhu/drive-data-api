@@ -35,7 +35,7 @@ Sobe o código atual num container avulso do `api`, com banco descartável, e
 confere por HTTP: health (com o perfil api: banco e RabbitMQ), OpenAPI, cadastro, login,
 renovação e logout, CRUD de veículo, os motoristas, o envio de lote de telemetria (202 e a
 mensagem na fila),
-a matriz 401/403/404/409/422 e o X-Request-ID no header, no envelope de erro e no log
+a matriz 401/403/404/409/413/422 e o X-Request-ID no header, no envelope de erro e no log
 de acesso.
 
 Saída: 0 = tudo OK; 1 = alguma verificação falhou (ou a aplicação não subiu);
@@ -310,6 +310,9 @@ if confere 202 "motorista envia em parte" POST /telemetry/batches "$token_motori
 fi
 confere 403 "silver não envia" POST /telemetry/batches "$token_silver" "$lote"
 confere 422 "lote vazio" POST /telemetry/batches "$token_usuario" '{"records":[]}'
+# Acima de 1 MiB (MAX_CONTENT_LENGTH): o printf da requisicao é builtin, sem limite de argumento.
+corpo_grande="{\"records\":\"$(head -c 1100000 /dev/zero | tr '\0' 'x')\"}"
+confere 413 "corpo acima de 1 MiB" POST /telemetry/batches "$token_usuario" "$corpo_grande"
 confere 200 "gestor remove o motorista" DELETE "$motoristas/$motorista" "$token_usuario"
 if confere 202 "motorista removido envia" POST /telemetry/batches "$token_motorista" "$lote"; then
   total=$((total + 1))

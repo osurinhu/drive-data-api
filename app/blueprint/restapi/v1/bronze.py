@@ -42,9 +42,14 @@ class BronzeRecords(MethodView):
         as próximas chamadas (`watermark`). Uma queda entre processar e guardar repete
         a página: deduplique por `record_id`. Com o bronze fora, a resposta é 503, e a
         chamada pode ser repetida com o mesmo cursor.
+
+        O cursor vale para os filtros com que foi emitido: para mudar de filtro, comece
+        de novo, sem cursor (ou com `ingested_from`).
         """
         return self.read_service.read(
             current_owner_scope(Permission.BRONZE_LER_DE_TODOS),
-            after=query["cursor"],
+            after=query["after"],
+            ingested_from=query["ingested_from"],
+            filters=query["filters"],
             limit=query["limit"],
         )
