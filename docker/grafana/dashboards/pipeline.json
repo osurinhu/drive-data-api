@@ -65,6 +65,83 @@
       "targets": [
         { "refId": "A", "legendFormat": "{{status}}", "expr": "sum by (status) (rate(http_requests_total[5m]))" }
       ]
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Lotes por resultado",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{outcome}}", "expr": "sum by (outcome) (rate(ingest_batches_total{job=\"api\"}[5m]))" }
+      ]
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "Publicação na fila (p95)",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(ingest_publish_seconds_bucket{job=\"api\"}[5m])))" }
+      ]
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Registros com user diferente do remetente",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 22 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "divergentes", "expr": "sum(rate(payload_user_mismatch_total{job=\"api\"}[5m]))" }
+      ]
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Destino das mensagens",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{outcome}}", "expr": "sum by (outcome) (rate(consumer_messages_total{job=\"consumer\"}[5m]))" }
+      ]
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Gravação do lote no consumer (p95)",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "p95", "expr": "histogram_quantile(0.95, sum by (le) (rate(consumer_batch_seconds_bucket{job=\"consumer\"}[5m])))" }
+      ]
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "Idade do carimbo (p99)",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "p99", "expr": "histogram_quantile(0.99, sum by (le) (rate(bronze_stamp_age_seconds_bucket{job=\"consumer\"}[5m])))" }
+      ]
+    },
+    {
+      "id": 14, "type": "timeseries", "title": "Registros entregues à silver",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "entregues", "expr": "sum(rate(bronze_read_records_total{job=\"bronze-api\"}[5m]))" }
+      ]
+    },
+    {
+      "id": 15, "type": "timeseries", "title": "Tamanho das filas",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{queue}}", "expr": "rabbitmq_queue_messages_bytes{queue=~\"bronze.telemetry.*\"}" }
+      ]
+    },
+    {
+      "id": 16, "type": "timeseries", "title": "Duração das requisições por rota (p95)",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "{{job}} {{route}}", "expr": "histogram_quantile(0.95, sum by (le, job, route) (rate(http_request_seconds_bucket[5m])))" }
+      ]
     }
   ]
 }
